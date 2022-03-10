@@ -29,8 +29,7 @@ class FinPass;
 class VulkanRender {
 public:
 
-    bool init(Span<std::uint8_t> uuid);
-    bool init(VulkanSurfaceInfo&);
+    bool init(RenderInitInfo);
 
     void destroy();
 
@@ -40,14 +39,21 @@ public:
 	bool CreateRenderingResource(RenderingResources&);
 	void DestroyRenderingResource(RenderingResources&);
 
+    VulkanExSwapchain* exSwapchain() const;
+    bool inited() const;
+
 private:
     bool initRes();
     void drawFrameSwapchain();
     void drawFrameOffscreen();
+    void setRenderTargetSize(Scene&, rg::RenderGraph&);
 
     Instance m_instance;
     std::unique_ptr<PrePass> m_prepass {nullptr};
     std::unique_ptr<FinPass> m_finpass {nullptr};
+
+    std::unique_ptr<FinPass> m_testpass {nullptr};
+    ReDrawCB m_redraw_cb;
 
     std::unique_ptr<StagingBuffer> m_vertex_buf {nullptr};
     std::unique_ptr<StagingBuffer> m_ubo_buf {nullptr};

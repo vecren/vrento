@@ -45,7 +45,7 @@ constexpr std::array<VertexInput, 4> vertex_input = {
 FinPass::FinPass(const Desc&) {}
 FinPass::~FinPass() {}
 
-static vk::RenderPass CreateRenderPass(const vk::Device &device, vk::Format format)
+static vk::RenderPass CreateRenderPass(const vk::Device &device, vk::Format format, vk::ImageLayout finalLayout)
 {
 	vk::AttachmentDescription attachment;
 	attachment
@@ -56,7 +56,7 @@ static vk::RenderPass CreateRenderPass(const vk::Device &device, vk::Format form
 		.setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
 		.setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
 		.setInitialLayout(vk::ImageLayout::eUndefined)
-		.setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
+		.setFinalLayout(finalLayout);
 
 	vk::AttachmentReference attachment_ref;
 	attachment_ref
@@ -158,7 +158,7 @@ void FinPass::prepare(Scene& scene, const Device& device, RenderingResources& rr
 			.setStageFlags(vk::ShaderStageFlagBits::eFragment);
 	}
 	{
-		auto pass = CreateRenderPass(device.handle(), m_desc.present_format);
+		auto pass = CreateRenderPass(device.handle(), m_desc.present_format, m_desc.present_layout);
 		descriptor_info.push_descriptor = true;
 		GraphicsPipeline pipeline;
 		pipeline.toDefault();
@@ -171,9 +171,13 @@ void FinPass::prepare(Scene& scene, const Device& device, RenderingResources& rr
 
 		pipeline.create(device, m_desc.pipeline);
 	}
+	/*	
 	if(m_desc.present_layout == vk::ImageLayout::ePresentSrcKHR || m_desc.present_layout == vk::ImageLayout::eSharedPresentKHR)
 		m_desc.render_layout = m_desc.present_layout;
 	else m_desc.render_layout = vk::ImageLayout::eColorAttachmentOptimal;
+	*/
+
+	m_desc.render_layout = vk::ImageLayout::eColorAttachmentOptimal;
 
 	{
 		auto& sc = scene.clearColor;
@@ -217,7 +221,8 @@ void FinPass::execute(const Device& device, RenderingResources& rr) {
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_desc.pipeline.layout, 0, 1, &wset);
 	}
 
-	{
+
+	if(m_desc.present_queue_index != device.graphics_queue().family_index) {
 		vk::ImageMemoryBarrier imb;
 		imb.setImage(m_desc.vk_present.handle)
 			.setSrcAccessMask(vk::AccessFlagBits::eMemoryRead)
@@ -228,7 +233,7 @@ void FinPass::execute(const Device& device, RenderingResources& rr) {
 			.setDstQueueFamilyIndex(device.graphics_queue().family_index)
 			.setSubresourceRange(base_range);
 		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTopOfPipe,
 			vk::PipelineStageFlagBits::eColorAttachmentOutput,
 			vk::DependencyFlagBits::eByRegion,
 			0, nullptr,
@@ -255,23 +260,24 @@ void FinPass::execute(const Device& device, RenderingResources& rr) {
 	cmd.bindVertexBuffers(0, 1, &(rr.vertex_buf->gpuBuf()), &m_desc.vertex_buf.offset);
 	cmd.draw(4, 1, 0, 0);
 	cmd.endRenderPass();	
-
-	vk::ImageMemoryBarrier imb;
-	imb.setImage(m_desc.vk_present.handle)	
-		.setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-		.setDstAccessMask(vk::AccessFlagBits::eMemoryRead)
-		.setOldLayout(m_desc.render_layout)
-		.setNewLayout(m_desc.present_layout)
-		.setSrcQueueFamilyIndex(device.graphics_queue().family_index)
-		.setDstQueueFamilyIndex(m_desc.present_queue_index)
-		.setSubresourceRange(base_range);
-	cmd.pipelineBarrier(
-		vk::PipelineStageFlagBits::eColorAttachmentOutput,
-		vk::PipelineStageFlagBits::eColorAttachmentOutput,
-		vk::DependencyFlagBits::eByRegion,
-		0, nullptr,
-		0, nullptr,
-		1, &imb);
+	if(m_desc.present_queue_index != device.graphics_queue().family_index) {
+		vk::ImageMemoryBarrier imb;
+		imb.setImage(m_desc.vk_present.handle)	
+			.setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+			.setDstAccessMask(vk::AccessFlagBits::eMemoryRead)
+			.setOldLayout(m_desc.render_layout)
+			.setNewLayout(m_desc.present_layout)
+			.setSrcQueueFamilyIndex(device.graphics_queue().family_index)
+			.setDstQueueFamilyIndex(m_desc.present_queue_index)
+			.setSubresourceRange(base_range);
+		cmd.pipelineBarrier(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits::eTopOfPipe,
+			vk::DependencyFlagBits::eByRegion,
+			0, nullptr,
+			0, nullptr,
+			1, &imb);
+	}
 }
 void FinPass::destory(const Device& device, RenderingResources&) {
 	device.DestroyPipeline(m_desc.pipeline);

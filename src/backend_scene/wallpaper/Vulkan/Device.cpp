@@ -5,19 +5,36 @@
 
 using namespace wallpaper::vulkan;
 
+namespace {
+
+void enumateDeviceExts(const vk::PhysicalDevice& gpu, wallpaper::Set<std::string>& set) {
+	auto rv = gpu.enumerateDeviceExtensionProperties();
+	VK_CHECK_RESULT_VOID_RE(rv.result);
+	for(auto& ext:rv.value) {
+		set.insert(ext.extensionName);
+	}
+}
+
 vk::Result CreateDevice(Instance& instance,
 	Span<vk::DeviceQueueCreateInfo> queueCreateInfos,
-	Span<const char*const> deviceExts,
+	Span<std::string_view> deviceExts,
 	vk::Device* device) {
+	
+	std::vector<const char*> exts_names_c;
+	std::transform(deviceExts.begin(), deviceExts.end(), std::back_inserter(exts_names_c), [](auto& s) {
+		return s.data();
+	});
 	
 	vk::DeviceCreateInfo deviceCreateInfo;
 	deviceCreateInfo
 		.setQueueCreateInfoCount(queueCreateInfos.size())
 		.setPQueueCreateInfos(queueCreateInfos.data())
-		.setEnabledExtensionCount(deviceExts.size())
-		.setPpEnabledExtensionNames(deviceExts.data());
+		.setEnabledExtensionCount(exts_names_c.size())
+		.setPpEnabledExtensionNames(exts_names_c.data());
 
     return instance.gpu().createDevice(&deviceCreateInfo, nullptr, device); 
+}
+
 }
 
 
@@ -41,6 +58,7 @@ std::vector<vk::DeviceQueueCreateInfo> Device::ChooseDeviceQueue(vk::SurfaceKHR 
 			.setPQueuePriorities(&defaultQueuePriority);
 		queues.push_back(info);
 	}
+	m_present_queue.family_index = graphic_indexs.front();
 	if(surface) {
 		index = 0;
 		for(auto& prop:props) {
@@ -50,7 +68,6 @@ std::vector<vk::DeviceQueueCreateInfo> Device::ChooseDeviceQueue(vk::SurfaceKHR 
 				present_indexs.push_back(index);
 			index++;
 		};
-		m_present_queue.family_index = graphic_indexs.front();
 		if(graphic_indexs.front() != present_indexs.front()) {
 			m_present_queue.family_index = present_indexs.front();
 			vk::DeviceQueueCreateInfo info;
@@ -64,18 +81,32 @@ std::vector<vk::DeviceQueueCreateInfo> Device::ChooseDeviceQueue(vk::SurfaceKHR 
 	return queues;
 }
 
-bool Device::Create(Instance& inst, Span<const char*const> exts, Device& device) {
-	vk::Result result {vk::Result::eIncomplete};
+bool Device::Create(Instance& inst, Span<Extension> exts, vk::Extent2D extent, Device& device) {
 	device.m_gpu = inst.gpu();
 	device.m_limits = inst.gpu().getProperties().limits;
+	device.set_out_extent(extent);
+
+	Set<std::string> tested_exts;
+	{
+		enumateDeviceExts(inst.gpu(), device.m_extensions);
+		for(auto& ext:exts) {
+			bool ok = device.supportExt(ext.name);
+			if(ok) tested_exts.insert(std::string(ext.name));
+			if(ext.required && !ok) {
+				LOG_ERROR("required vulkan device extension \"%s\" is not supported", ext.name.data());
+				return false;
+			}
+		}
+	}
+	std::vector<std::string_view> tested_exts_c {tested_exts.begin(), tested_exts.end()};
 
 	bool rq_surface = !inst.offscreen();
-	VK_CHECK_RESULT_BOOL_RE(CreateDevice(inst, device.ChooseDeviceQueue(inst.surface()), exts, &device.m_device));
+	VK_CHECK_RESULT_BOOL_RE(CreateDevice(inst, device.ChooseDeviceQueue(inst.surface()), tested_exts_c, &device.m_device));
 	device.m_graphics_queue.handle = device.m_device.getQueue(device.m_graphics_queue.family_index, 0);
 	device.m_present_queue.handle = device.m_device.getQueue(device.m_present_queue.family_index, 0);
 
 	if(rq_surface) {
-		if(!Swapchain::Create(device, inst.surface(), {1280, 720}, device.m_swapchain)) {
+		if(!Swapchain::Create(device, inst.surface(), extent, device.m_swapchain)) {
 			LOG_ERROR("create swapchain failed");
 			return false;
 		}
@@ -89,6 +120,7 @@ bool Device::Create(Instance& inst, Span<const char*const> exts, Device& device)
 	}
 	{
 		VmaAllocatorCreateInfo allocatorInfo = {};
+		allocatorInfo.vulkanApiVersion = WP_VULKAN_VERSION;
 		allocatorInfo.physicalDevice = device.m_gpu;
 		allocatorInfo.device = device.m_device;
 		allocatorInfo.instance = inst.inst();
@@ -114,7 +146,9 @@ void Device::Destroy() {
 		for(auto& i:m_swapchain.images()) {
 			m_device.destroyImageView(i.view);
 		}
-		m_device.destroySwapchainKHR(m_swapchain.handle());
+		if(m_swapchain.handle()) {
+			m_device.destroySwapchainKHR(m_swapchain.handle());
+		}
 		vmaDestroyAllocator(m_allocator);
 		m_device.destroy();
 	}
@@ -131,6 +165,13 @@ void Device::DestroyImageParameters(const ImageParameters& image) const {
 	if(image.handle)
 		vmaDestroyImage(m_allocator, image.handle, image.allocation);
 }
+void Device::DestroyExImageParameters(const ExImageParameters& image) const {
+	m_device.destroySampler(image.sampler);
+	m_device.destroyImageView(image.view);
+	m_device.destroyImage(image.handle);
+	m_device.freeMemory(image.mem);
+}
+
 void Device::DestroyPipeline(const PipelineParameters& pipe) const {
 	m_device.destroyPipeline(pipe.handle);
 	m_device.destroyPipelineLayout(pipe.layout);
@@ -144,19 +185,6 @@ Device::Device():m_tex_cache(std::make_unique<TextureCache>(*this)) {
 }
 Device::~Device() {};
 
-/*
-Device::Device(Device&& o) {
-	*this = std::move(o);
+bool Device::supportExt(std::string_view name) const {
+	return exists(m_extensions, name);
 }
-Device& Device::operator=(Device&& o) {
-	m_device = o.m_device;
-	m_gpu = o.m_gpu;
-	m_swapchain = o.m_swapchain;
-	m_allocator = o.m_allocator;
-	m_command_pool = o.m_command_pool;
-	m_graphics_queue = o.m_graphics_queue;
-	m_present_queue = o.m_present_queue;
-	m_tex_cache = std::move(o.m_tex_cache);
-	return *this;
-}
-*/

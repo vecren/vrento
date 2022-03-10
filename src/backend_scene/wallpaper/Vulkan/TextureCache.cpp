@@ -29,6 +29,7 @@ vk::Format wallpaper::vulkan::ToVkType(TextureFormat tf) {
 	case TextureFormat::RGBA8:
 		return vk::Format::eR8G8B8A8Unorm;
 	default:
+		assert(false);
 		return vk::Format::eR8G8B8A8Unorm;
 	}
 }
@@ -45,6 +46,92 @@ std::size_t TextureKey::HashValue(const TextureKey& k) {
 	utils::hash_combine(seed, (int)k.sample.magFilter);
 	return seed;
 }
+
+
+vk::SamplerAddressMode wallpaper::vulkan::ToVkType(wallpaper::TextureWrap sam) {
+	using namespace wallpaper;
+	switch (sam)
+	{
+	case TextureWrap::CLAMP_TO_EDGE:
+		return vk::SamplerAddressMode::eClampToEdge;
+	case TextureWrap::REPEAT:
+	default:
+		return vk::SamplerAddressMode::eRepeat;
+	}	
+}
+vk::Filter wallpaper::vulkan::ToVkType(wallpaper::TextureFilter sam) {
+	using namespace wallpaper;
+	switch (sam)
+	{
+	case TextureFilter::LINEAR:
+		return vk::Filter::eLinear;
+	case TextureFilter::NEAREST:
+	default:
+		return vk::Filter::eNearest;
+	}	
+}
+
+static vk::SamplerCreateInfo GenSamplerInfo(TextureKey key) {
+	vk::SamplerCreateInfo sampler_info;
+	auto& sam = key.sample;
+	sampler_info
+		.setMagFilter(ToVkType(sam.magFilter))
+		.setMinFilter(ToVkType(sam.minFilter))
+		.setAddressModeU(ToVkType(sam.wrapS))
+		.setAddressModeV(ToVkType(sam.wrapS))
+		.setAddressModeW(ToVkType(sam.wrapT))
+		.setMipmapMode(vk::SamplerMipmapMode::eLinear)
+		.setAnisotropyEnable(false)
+		.setMaxAnisotropy(1.0f)
+		.setCompareEnable(false)
+		.setCompareOp(vk::CompareOp::eNever)
+		.setMinLod(0.0f)
+		.setMaxLod(1.0f)
+		.setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+		.setUnnormalizedCoordinates(false);
+	return sampler_info;
+}
+
+static vk::Result TransImgLayout(const vk::Queue &queue, vk::CommandBuffer &cmd, const ImageParameters &image, vk::ImageLayout layout)
+{
+	vk::Result result;
+	do {
+		result = cmd.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		if(result != vk::Result::eSuccess) break;
+
+		vk::ImageSubresourceRange subresourceRange;
+		subresourceRange
+			.setAspectMask(vk::ImageAspectFlagBits::eColor)
+			.setBaseMipLevel(0)
+			.setBaseArrayLayer(0)
+			.setLevelCount(VK_REMAINING_MIP_LEVELS)
+			.setLayerCount(VK_REMAINING_ARRAY_LAYERS);
+
+		{
+			vk::ImageMemoryBarrier out_bar;
+			out_bar.setSrcAccessMask(vk::AccessFlagBits::eMemoryWrite)
+				.setDstAccessMask(vk::AccessFlagBits::eMemoryRead)
+				.setOldLayout(vk::ImageLayout::eUndefined)
+				.setNewLayout(layout)
+				.setImage(image.handle)
+				.setSubresourceRange(subresourceRange);
+			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader,
+								vk::DependencyFlagBits::eByRegion,
+								0, nullptr,
+								0, nullptr,
+								1, &out_bar);
+		}
+		result = cmd.end();
+		if(result != vk::Result::eSuccess) break;
+
+		vk::SubmitInfo sub_info;
+		sub_info.setCommandBufferCount(1)
+			.setPCommandBuffers(&cmd);
+		result = queue.submit(1, &sub_info, {});
+	} while(false);
+	return result;
+}
+
 
 static vk::ResultValue<vk::DeviceMemory> AllocateMemory(const vk::Device& device, const vk::PhysicalDevice& gpu, vk::MemoryRequirements reqs,
 	vk::MemoryPropertyFlags property, void* pNext=NULL) {
@@ -93,6 +180,7 @@ static vk::ResultValue<ExImageParameters> CreateExImage(uint32_t width, uint32_t
 			.setUsage(usage)
 			.setQueueFamilyIndexCount(0)
 			.setInitialLayout(vk::ImageLayout::eUndefined)
+			.setSharingMode(vk::SharingMode::eExclusive)
 			.setPNext(&ex_info);
 		info.extent.setWidth(width)
 			.setHeight(height)
@@ -100,18 +188,17 @@ static vk::ResultValue<ExImageParameters> CreateExImage(uint32_t width, uint32_t
 	
 		image.extent = info.extent;
 		rv.result = device.createImage(&info, nullptr, &image.handle);
-		if(rv.result != vk::Result::eSuccess) break;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 
 		image.mem_reqs = device.getImageMemoryRequirements(image.handle);
 		auto rv_memory = AllocateMemory(device, gpu, image.mem_reqs, 
 			vk::MemoryPropertyFlagBits::eDeviceLocal, &ex_mem_info);
 		rv.result = rv_memory.result;
-		if(rv.result != vk::Result::eSuccess) break;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 		image.mem = rv_memory.value;
 
 		rv.result = device.bindImageMemory(image.handle, rv_memory.value, 0);
-		if(rv.result != vk::Result::eSuccess) break;
-		else rv.result = vk::Result::eIncomplete;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 
 		{
 			vk::ImageViewCreateInfo createinfo;
@@ -126,16 +213,16 @@ static vk::ResultValue<ExImageParameters> CreateExImage(uint32_t width, uint32_t
 				.setBaseArrayLayer(0)
 				.setLayerCount(1);
 			rv.result = device.createImageView(&createinfo, nullptr, &image.view);
-			if(rv.result != vk::Result::eSuccess) break;
+			VK_CHECK_RESULT_ACT(break, rv.result);
 		}
 		rv.result = device.createSampler(&sampler_info, nullptr, &image.sampler);
-		if(rv.result != vk::Result::eSuccess) break;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 		{
 			vk::MemoryGetFdInfoKHR info;
 			info.setMemory(image.mem)
 				.setHandleType(vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd);
 			rv.result = device.getMemoryFdKHR(&info, &image.fd);
-			if(rv.result != vk::Result::eSuccess) break;
+			VK_CHECK_RESULT_ACT(break, rv.result);
 		}
 		rv.result = vk::Result::eSuccess;
 	} while(false);
@@ -145,24 +232,33 @@ static vk::ResultValue<ExImageParameters> CreateExImage(uint32_t width, uint32_t
 
 vk::ResultValue<ExImageParameters> TextureCache::CreateExTex(uint32_t width, uint32_t height, vk::Format format) {
 	vk::SamplerCreateInfo sampler_info;
-	sampler_info.setMagFilter(vk::Filter::eLinear)
-		.setMinFilter(vk::Filter::eLinear)
-		.setMipmapMode(vk::SamplerMipmapMode::eNearest)
-		.setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
-		.setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
-		.setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+	sampler_info
+		.setMagFilter(vk::Filter::eNearest)
+		.setMinFilter(vk::Filter::eNearest)
+		.setMipmapMode(vk::SamplerMipmapMode::eLinear)
+		.setAddressModeU(vk::SamplerAddressMode::eRepeat)
+		.setAddressModeV(vk::SamplerAddressMode::eRepeat)
+		.setAddressModeW(vk::SamplerAddressMode::eRepeat)
 		.setAnisotropyEnable(false)
 		.setMaxAnisotropy(1.0f)
 		.setCompareEnable(false)
-		.setCompareOp(vk::CompareOp::eAlways)
-		.setMinLod(0.0f).setMaxLod(0.0f)
-		.setBorderColor(vk::BorderColor::eFloatTransparentBlack)
+		.setCompareOp(vk::CompareOp::eNever)
+		.setMinLod(0.0f).setMaxLod(1.0f)
+		.setBorderColor(vk::BorderColor::eIntOpaqueBlack)
 		.setUnnormalizedCoordinates(false);
-    return CreateExImage(width, height, format, sampler_info,
-        vk::ImageUsageFlagBits::eSampled | 
+    auto rv = CreateExImage(width, height, format, sampler_info,
+        vk::ImageUsageFlagBits::eSampled |
 		vk::ImageUsageFlagBits::eColorAttachment |
 		vk::ImageUsageFlagBits::eTransferDst, 
 		m_device.device(), m_device.gpu());
+	VK_CHECK_RESULT(rv.result);
+	auto& eximg = rv.value;
+
+	if(!m_tex_cmd) allocateCmd();
+	TransImgLayout(m_device.graphics_queue().handle, m_tex_cmd, eximg.toImageParameters(), vk::ImageLayout::eGeneral);
+	rv.result = m_device.handle().waitIdle();
+	VK_CHECK_RESULT(rv.result);
+	return rv;
 }
 
 static vk::Result CreateImage(const Device &device, ImageParameters& image, 
@@ -282,45 +378,6 @@ static vk::Result CopyImageData(Span<BufferParameters> in_bufs, Span<vk::Extent3
 	return result;
 }
 
-static vk::Result TransImgLayout(const vk::Queue &queue, vk::CommandBuffer &cmd, ImageParameters &image)
-{
-	vk::Result result;
-	do {
-		result = cmd.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-		if(result != vk::Result::eSuccess) break;
-
-		vk::ImageSubresourceRange subresourceRange;
-		subresourceRange
-			.setAspectMask(vk::ImageAspectFlagBits::eColor)
-			.setBaseMipLevel(0)
-			.setBaseArrayLayer(0)
-			.setLevelCount(VK_REMAINING_MIP_LEVELS)
-			.setLayerCount(VK_REMAINING_ARRAY_LAYERS);
-
-		{
-			vk::ImageMemoryBarrier out_bar;
-			out_bar.setSrcAccessMask(vk::AccessFlagBits::eMemoryWrite)
-				.setDstAccessMask(vk::AccessFlagBits::eShaderRead)
-				.setOldLayout(vk::ImageLayout::eUndefined)
-				.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-				.setImage(image.handle)
-				.setSubresourceRange(subresourceRange);
-			cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader,
-								vk::DependencyFlagBits::eByRegion,
-								0, nullptr,
-								0, nullptr,
-								1, &out_bar);
-		}
-		result = cmd.end();
-		if(result != vk::Result::eSuccess) break;
-
-		vk::SubmitInfo sub_info;
-		sub_info.setCommandBufferCount(1)
-			.setPCommandBuffers(&cmd);
-		result = queue.submit(1, &sub_info, {});
-	} while(false);
-	return result;
-}
 
 
 vk::ResultValue<ImageSlots> TextureCache::CreateTex(Image& image) {
@@ -336,17 +393,20 @@ vk::ResultValue<ImageSlots> TextureCache::CreateTex(Image& image) {
 
 	rv.value.slots.resize(image.slots.size());
 
+	auto& sam = image.header.sample;
+
 	for(int i=0; i<image.slots.size();i++) {
 		auto& image_paras = rv.value.slots[i];
 		auto& image_slot = image.slots[i];
 
 		vk::SamplerCreateInfo sampler_info;
-		sampler_info.setMagFilter(vk::Filter::eLinear)
-			.setMinFilter(vk::Filter::eLinear)
+		sampler_info
+			.setMagFilter(ToVkType(sam.magFilter))
+			.setMinFilter(ToVkType(sam.minFilter))
+			.setAddressModeU(ToVkType(sam.wrapS))
+			.setAddressModeV(ToVkType(sam.wrapS))
+			.setAddressModeW(ToVkType(sam.wrapT))
 			.setMipmapMode(vk::SamplerMipmapMode::eLinear)
-			.setAddressModeU(vk::SamplerAddressMode::eRepeat)
-			.setAddressModeV(vk::SamplerAddressMode::eRepeat)
-			.setAddressModeW(vk::SamplerAddressMode::eRepeat)
 			.setAnisotropyEnable(false)
 			.setMaxAnisotropy(1.0f)
 			.setCompareEnable(false)
@@ -361,7 +421,7 @@ vk::ResultValue<ImageSlots> TextureCache::CreateTex(Image& image) {
 		
 		rv.result = CreateImage(m_device, image_paras, ext, image_slot.size(), format, sampler_info, 	
 			vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);	
-		if(rv.result != vk::Result::eSuccess) break;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 
 		std::vector<BufferParameters> stage_bufs;
 		std::vector<vk::Extent3D> extents;
@@ -384,56 +444,11 @@ vk::ResultValue<ImageSlots> TextureCache::CreateTex(Image& image) {
 				vmaDestroyBuffer(m_device.vma_allocator(), buf.handle, buf.allocation);
 			});
 		}));
-		if(rv.result != vk::Result::eSuccess) break;
-
+		VK_CHECK_RESULT_ACT(break, rv.result);
 		rv.result = m_device.handle().waitIdle();
 	}
 	m_tex_map[image.key] = rv.value;
 	return rv;
-}
-
-static vk::SamplerAddressMode ToVkType(wallpaper::TextureWrap sam) {
-	using namespace wallpaper;
-	switch (sam)
-	{
-	case TextureWrap::CLAMP_TO_EDGE:
-		return vk::SamplerAddressMode::eClampToEdge;
-	case TextureWrap::REPEAT:
-	default:
-		return vk::SamplerAddressMode::eRepeat;
-	}	
-}
-static vk::Filter ToVkType(wallpaper::TextureFilter sam) {
-	using namespace wallpaper;
-	switch (sam)
-	{
-	case TextureFilter::LINEAR:
-		return vk::Filter::eLinear;
-	case TextureFilter::NEAREST:
-	default:
-		return vk::Filter::eNearest;
-	}	
-}
-
-static vk::SamplerCreateInfo GenSamplerInfo(TextureKey key) {
-	vk::SamplerCreateInfo sampler_info;
-	auto& sam = key.sample;
-	sampler_info
-		.setMagFilter(ToVkType(sam.magFilter))
-		.setMinFilter(ToVkType(sam.minFilter))
-		.setAddressModeU(ToVkType(sam.wrapS))
-		.setAddressModeV(ToVkType(sam.wrapS))
-		.setAddressModeW(ToVkType(sam.wrapT))
-		.setMipmapMode(vk::SamplerMipmapMode::eNearest)
-		.setAnisotropyEnable(false)
-		.setMaxAnisotropy(1.0f)
-		.setCompareEnable(false)
-		.setCompareOp(vk::CompareOp::eAlways)
-		.setMinLod(0.0f)
-		.setMaxLod(0.0f)
-		.setBorderColor(vk::BorderColor::eIntOpaqueBlack)
-		.setUnnormalizedCoordinates(false);
-	return sampler_info;
 }
 
 void TextureCache::allocateCmd() {
@@ -454,11 +469,12 @@ vk::ResultValue<ImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
 			vk::ImageUsageFlagBits::eTransferDst | 
 			vk::ImageUsageFlagBits::eSampled |
 			vk::ImageUsageFlagBits::eColorAttachment);	
-		if(rv.result != vk::Result::eSuccess) break;
+		VK_CHECK_RESULT_ACT(break, rv.result);
 
 		if(!m_tex_cmd) allocateCmd();
-		TransImgLayout(m_device.graphics_queue().handle, m_tex_cmd, image_paras);
+		TransImgLayout(m_device.graphics_queue().handle, m_tex_cmd, image_paras, vk::ImageLayout::eShaderReadOnlyOptimal);
 		rv.result = m_device.handle().waitIdle();
+		VK_CHECK_RESULT_ACT(break, rv.result);
 	} while(false);
 	return rv;
 }

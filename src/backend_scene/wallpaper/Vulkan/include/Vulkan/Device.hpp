@@ -17,7 +17,7 @@ public:
 	Device();
 	~Device();
 
-	static bool Create(Instance&, Span<const char*const> exts, Device&);
+	static bool Create(Instance&, Span<Extension> exts, vk::Extent2D extent, Device&);
 
 	void Destroy();
 
@@ -34,11 +34,14 @@ public:
 	const auto& out_extent() const { return m_extent; }
 	void set_out_extent(vk::Extent2D v) { m_extent = v; }
 
-	auto& tex_cache() const { return *m_tex_cache; }
+	bool supportExt(std::string_view) const;
+
+	TextureCache& tex_cache() const { return *m_tex_cache; }
 
 	void DestroyBuffer(const BufferParameters&) const;
 	void DestroyImageParameters(const ImageParameters& image) const;
 	void DestroyPipeline(const PipelineParameters&) const;
+	void DestroyExImageParameters(const ExImageParameters& image) const;
 
 	vk::DeviceSize GetUsage() const;
 private:
@@ -47,6 +50,7 @@ private:
 	vk::Device m_device;
 	vk::PhysicalDevice m_gpu;
 	vk::PhysicalDeviceLimits m_limits;
+	Set<std::string> m_extensions;
 
 	Swapchain m_swapchain;
 	// c struct

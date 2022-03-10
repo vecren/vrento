@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Swapchain/ExSwapchain.hpp"
-#include "TextureCache.hpp"
+#include "Device.hpp"
 #include <cstdio>
 
 namespace wallpaper
@@ -13,11 +13,15 @@ struct VulkanExHandle {
     ExHandle handle;
     ExImageParameters image;
 };
+struct VulkanExHandleSemaphore {
+    ExHandle handle;
+    vk::Semaphore semaphore;
+};
 
 class VulkanExSwapchain : public ExSwapchain {
     using atomic_ = std::atomic<ExHandle*>;
 public:
-    VulkanExSwapchain(std::array<VulkanExHandle, 3> handles):m_handles(handles) {
+    VulkanExSwapchain(std::array<VulkanExHandle, 3> handles, vk::Extent2D ext):m_handles(handles),m_extent(ext) {
         int index = 0;
         for(auto& h:m_handles) {
             auto& handle = h.handle;
@@ -33,6 +37,15 @@ public:
     }
     virtual ~VulkanExSwapchain() = default;
 
+    uint width() const override {
+        return m_extent.width;
+    }
+    uint height() const override {
+        return m_extent.height;
+    }
+
+    const auto& handles() const { return m_handles; }
+
     ExImageParameters& GetInprogressImage() {
         return m_handles.at((*inprogress()).id()).image;
     }
@@ -47,16 +60,29 @@ private:
     atomic_ m_presented  {nullptr};
     atomic_ m_ready      {nullptr};
     atomic_ m_inprogress {nullptr};
+    vk::Extent2D m_extent;
 };
 
-inline std::unique_ptr<VulkanExSwapchain> CreateExSwapchain(TextureCache& cache, std::uint32_t w, std::uint32_t h) {
+inline std::unique_ptr<VulkanExSwapchain> CreateExSwapchain(const Device& device, uint w, uint h) {
     std::array<VulkanExHandle, 3> handles;
     for(auto& handle:handles) {
-        auto rv = cache.CreateExTex(w, h, vk::Format::eR8G8B8A8Unorm);
-        if(rv.result != vk::Result::eSuccess) return nullptr;
+        auto rv = device.tex_cache().CreateExTex(w, h, vk::Format::eR8G8B8A8Unorm);
+        VK_CHECK_RESULT_ACT(return nullptr, rv.result);
         handle.image = rv.value;
     }
-    return std::make_unique<VulkanExSwapchain>(handles);
+    /*
+    VulkanExHandleSemaphore handle_sem;
+    {
+        vk::SemaphoreCreateInfo info;
+        vk::ExportSemaphoreCreateInfo esci { vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd };
+        info.setPNext(&esci);
+        VK_CHECK_RESULT_ACT(return nullptr, device.handle().createSemaphore(&info, nullptr, &handle_sem.semaphore));
+        vk::SemaphoreGetFdInfoKHR fd_info;
+        fd_info.semaphore = handle_sem.semaphore;
+        fd_info.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
+        VK_CHECK_RESULT_ACT(return nullptr, device.handle().getSemaphoreFdKHR(&fd_info, &handle_sem.handle.fd));
+    }*/
+    return std::make_unique<VulkanExSwapchain>(handles, vk::Extent2D{w,h});
 }
 
 }

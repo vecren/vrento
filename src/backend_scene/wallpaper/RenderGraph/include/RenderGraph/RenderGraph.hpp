@@ -5,6 +5,7 @@
 #include "PassNode.hpp"
 
 #include "Utils/MapSet.hpp"
+#include "Utils/span.hpp"
 
 namespace wallpaper
 {
@@ -36,7 +37,9 @@ public:
     TexNode* getTexNode(NodeID) const;
     Pass* getPass(NodeID) const;
 
+    // all render pass
     std::vector<NodeID> topologicalOrder() const;
+    std::vector<std::vector<TexNode*>> getLastReadTexs(Span<NodeID>) const; 
 
   	void ToGraphviz(std::string_view path) const {
 		m_dg.ToGraphviz(path);	

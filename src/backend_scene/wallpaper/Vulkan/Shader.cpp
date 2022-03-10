@@ -166,9 +166,9 @@ static glslang::EShTargetLanguageVersion getTargetVersion(glslang::EShTargetClie
     case glslang::EShTargetVulkan_1_2:
         TargetVersion = glslang::EShTargetSpv_1_5;
         break;
-    //case glslang::EShTargetVulkan_1_3:
-    //    TargetVersion = glslang::EShTargetSpv_1_6;
-    //    break;
+    case glslang::EShTargetVulkan_1_3:
+        TargetVersion = glslang::EShTargetSpv_1_6;
+        break;
     case glslang::EShTargetOpenGL_450:
         TargetVersion = glslang::EShTargetSpv_1_0;
         break;
@@ -321,22 +321,19 @@ bool wallpaper::vulkan::CompileAndLinkShaderUnits(Span<ShaderCompUnit> compUnits
     spvOptions.generateDebugInfo = true;
 
     spvs.clear();
-	static int num {0};
     for(auto& unit:compUnits) {
         Uni_ShaderSpv spv = std::make_unique<ShaderSpv>();
         spv->stage = ToVkType_Stage(unit.stage);
         auto im = program.getIntermediate(unit.stage);
         im->setOriginUpperLeft();
         glslang::GlslangToSpv(*im, spv->spirv, &logger, &spvOptions);
-		if(num == 1)
-			glslang::OutputSpvBin(spv->spirv, (std::to_string((int)spv->stage) + ".spv").c_str());
+		//glslang::OutputSpvBin(spv->spirv, (std::to_string((int)spv->stage) + ".spv").c_str());
         spvs.emplace_back(std::move(spv)); 
         
         auto messages = logger.getAllMessages();
         if (messages.length() > 0)
             LOG_ERROR("glslang(spv): %s\n", messages.c_str());
     }
-	num++;
 
     return true;
 }
@@ -363,7 +360,8 @@ vk::Format wallpaper::vulkan::ToVkType(glslang::TBasicType type, size_t size) {
 		}
 		break;
 	}
-	LOG_ERROR("can't covert glslang type to vulkan format");
+	LOG_ERROR("can't covert glslang type \"%s\" to vulkan format", glslang::TType::getBasicString(type));
+	assert(false);
 	return vk::Format::eUndefined;
 }
 
@@ -374,60 +372,7 @@ size_t wallpaper::vulkan::Sizeof(glslang::TBasicType type) {
 	case glslang::TBasicType::EbtInt:
 		return sizeof(float);
 	}
-	LOG_ERROR("can't get glslang type size");
+	LOG_ERROR("can't get glslang type \"%s\" size", glslang::TType::getBasicString(type));
+	assert(false);
 	return 0;
 }
-
-/*
-void CreateShader() {
-	{
-		glslang::TShader shader(EShLanguage::EShLangVertex);
-		shader.setStrings(&vertex, 1);
-		shader.setEnvInput(glslang::EShSource::EShSourceGlsl, EShLanguage::EShLangVertex,
-						   glslang::EShClient::EShClientVulkan, glslang::EshTargetClientVersion::EShTargetVulkan_1_0);
-		shader.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_0);
-		shader.setAutoMapLocations(true);
-		shader.setAutoMapBindings(true);
-		TBuiltInResource resource = DefaultTBuiltInResource;
-		EShMessages messages = EShMsgSuppressWarnings; //EShMsgDefault;
-		if (!shader.parse(&resource, 100, false, messages))
-			fprintf(stderr, "glslang(vert): %s\n", shader.getInfoLog());
-
-		glslang::TShader shader_frag(EShLanguage::EShLangFragment);
-		shader_frag.setStrings(&frag, 1);
-		shader_frag.setEnvInput(glslang::EShSource::EShSourceGlsl, EShLanguage::EShLangFragment,
-								glslang::EShClient::EShClientVulkan, glslang::EshTargetClientVersion::EShTargetVulkan_1_0);
-		shader_frag.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_0);
-		shader_frag.setAutoMapLocations(true);
-		shader_frag.setAutoMapBindings(true);
-		if (!shader_frag.parse(&resource, 100, false, messages))
-			fprintf(stderr, "glslang(frag): %s\n", shader_frag.getInfoLog());
-		std::vector<unsigned int> spirv;
-		std::array<std::pair<EShLanguage, vk::ShaderModule *>, 2> stags;
-		stags[0] = {EShLanguage::EShLangVertex, &sm_vert};
-		stags[1] = {EShLanguage::EShLangFragment, &sm_frag};
-		{
-			glslang::TProgram program;
-			program.addShader(&shader);
-			program.addShader(&shader_frag);
-			if (!(program.link(messages) && program.mapIO()))
-				fprintf(stderr, "glslang(link): %s\n", program.getInfoLog());
-			spv::SpvBuildLogger logger;
-			glslang::SpvOptions spvOptions;
-			spvOptions.validate = true;
-			spvOptions.generateDebugInfo = true;
-			for (auto &stag : stags)
-			{
-				spirv.resize(0);
-				auto im = program.getIntermediate(stag.first);
-				im->setOriginUpperLeft();
-				glslang::GlslangToSpv(*im, spirv, &logger, &spvOptions);
-				auto messages = logger.getAllMessages();
-				if (messages.length() > 0)
-					printf("glslang(spv): %s\n", messages.c_str());
-				*stag.second = CreateShaderModule(device, spirv);
-			}
-		}
-	}
-}
-*/

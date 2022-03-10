@@ -47,6 +47,10 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
 		*vk_textures[i] = rv.value;
     }
 
+   	for(auto& tex:releaseTexs()) {
+		device.tex_cache().MarkShareReady(tex);
+	}
+
     setPrepared();
 };
 void CopyPass::execute(const Device& device, RenderingResources& rr) {

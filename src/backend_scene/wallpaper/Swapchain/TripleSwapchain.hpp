@@ -22,6 +22,9 @@ public:
     T* getInprogress() {
         return inprogress();
     }
+
+    virtual uint width() const = 0;
+    virtual uint height() const = 0;
 protected:
     TripleSwapchain() = default;
 

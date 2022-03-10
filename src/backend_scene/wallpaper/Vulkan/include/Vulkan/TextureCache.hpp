@@ -15,7 +15,8 @@ namespace vulkan
 {
 
 vk::Format ToVkType(TextureFormat);
-
+vk::SamplerAddressMode ToVkType(TextureWrap); 
+vk::Filter ToVkType(TextureFilter);
 
 enum class TexUsage {
 	COLOR,

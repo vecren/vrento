@@ -51,6 +51,15 @@ struct ExImageParameters {
 	int fd;
 
 	bool ok() const { return handle; }
+
+	ImageParameters toImageParameters() {
+		return ImageParameters {
+			.handle = handle,
+			.view = view,
+			.sampler = sampler,
+			.extent = extent
+		};
+	}
 };
 }
 }

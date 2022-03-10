@@ -82,9 +82,15 @@ static void UpdateUniform(StagingBuffer* buf,
 	using namespace wallpaper;
 	Span<uint8_t> value_u8 {(uint8_t*)value.data(), value.size()*sizeof(ShaderValue::value_type)};
 	auto uni = block.member_map.find(name);
+	if(uni == block.member_map.end()) {
+		// log
+		return;
+	}
+
 	size_t offset = uni->second.offset;
 	size_t type_size = Sizeof(uni->second.type);
 	if(type_size != value_u8.size()) {
+		//assert(type_size == value_u8.size());
 		;//to do
 	}
 	buf->writeToBuf(bufref, value_u8, offset);
@@ -281,6 +287,9 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
 		auto& sc = scene.clearColor;
 		m_desc.clear_value = vk::ClearValue(std::array {sc[0], sc[1], sc[2], 1.0f});
 	}
+	for(auto& tex:releaseTexs()) {
+		device.tex_cache().MarkShareReady(tex);
+	}
     setPrepared();
 }
 
@@ -310,22 +319,6 @@ void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
 			.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
 			.setPImageInfo(&desc_img);
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_desc.pipeline.layout, 0, 1, &wset);
-		/*
-		vk::ImageMemoryBarrier imb_in;
-		imb_in.setImage(img.handle)
-			.setSrcAccessMask(vk::AccessFlagBits::eMemoryRead)
-			.setDstAccessMask(vk::AccessFlagBits::eShaderRead)
-			.setOldLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-			.setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-			.setSubresourceRange(base_range);
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eVertexShader,
-			vk::PipelineStageFlagBits::eFragmentShader|vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::DependencyFlagBits::eByRegion,
-			0, nullptr,
-			0, nullptr,
-			1, &imb_in);
-		*/
 	}
 
 	if(m_desc.ubo_buf){
@@ -338,27 +331,6 @@ void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
 			.setPBufferInfo(&desc_buf);
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_desc.pipeline.layout, 0, 1, &wset);
 	}
-	
-	/*{
-		vk::ImageMemoryBarrier imb;
-		imb.setImage(m_desc.vk_output.handle)
-			.setSrcAccessMask(vk::AccessFlagBits::eMemoryRead)
-			.setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-			.setOldLayout(vk::ImageLayout::eUndefined)
-			.setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
-			.setSubresourceRange(base_range);
-		if(m_desc.blending) {
-			imb.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-			imb.dstAccessMask |= vk::AccessFlagBits::eColorAttachmentRead;
-		}
-		cmd.pipelineBarrier(
-			vk::PipelineStageFlagBits::eFragmentShader,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput,
-			vk::DependencyFlagBits::eByRegion,
-			0, nullptr,
-			0, nullptr,
-			1, &imb);
-	}*/
 
 	vk::RenderPassBeginInfo pass_begin_info;
 	pass_begin_info.setRenderPass(m_desc.pipeline.pass)

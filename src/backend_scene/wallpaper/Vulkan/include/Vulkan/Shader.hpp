@@ -18,7 +18,6 @@ struct ShaderCompUnit {
     EShLanguage stage;
     std::string src;
 };
-
 vk::Format ToVkType(glslang::TBasicType, size_t);
 vk::ShaderStageFlags ToVkType(EShLanguageMask);
 vk::ShaderStageFlagBits ToVkType_Stage(EShLanguage);
@@ -28,7 +27,7 @@ struct ShaderReflected {
     struct BlockedUniform {
         int block_index;
         int offset;
-        glslang::TBasicType type;
+        glslang::TBasicType type {};
         size_t num {1}; // for array,vector,matrix
     };
     struct Block {

@@ -17,9 +17,9 @@ struct ExHandle {
 
     int id() const { return m_id; }
 private:
-    int m_id;
+    int m_id {0};
 };
 
 //class ExSwapchain : public TripleSwapchain<ExHandle> {};
-typedef TripleSwapchain<ExHandle> ExSwapchain;
+using ExSwapchain = TripleSwapchain<ExHandle>;
 }
