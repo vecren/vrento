@@ -172,7 +172,10 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetEventStatus                      vkGetEventStatus {};
     PFN_vkGetFenceStatus                      vkGetFenceStatus {};
     PFN_vkGetImageMemoryRequirements          vkGetImageMemoryRequirements {};
+    PFN_vkGetImageSubresourceLayout           vkGetImageSubresourceLayout {};
     PFN_vkGetMemoryFdKHR                      vkGetMemoryFdKHR {};
+    PFN_vkGetSemaphoreFdKHR                   vkGetSemaphoreFdKHR {};
+    PFN_vkGetImageDrmFormatModifierPropertiesEXT vkGetImageDrmFormatModifierPropertiesEXT {};
     PFN_vkGetPipelineExecutablePropertiesKHR  vkGetPipelineExecutablePropertiesKHR {};
     PFN_vkGetPipelineExecutableStatisticsKHR  vkGetPipelineExecutableStatisticsKHR {};
     PFN_vkGetQueryPoolResults                 vkGetQueryPoolResults {};
@@ -480,6 +483,12 @@ public:
 
     VkMemoryRequirements GetImageMemoryRequirements(VkImage image) const noexcept;
 
+    VkSubresourceLayout GetImageSubresourceLayout(VkImage                    image,
+                                                  const VkImageSubresource& subresource) const noexcept;
+
+    VkResult GetImageDrmFormatModifierPropertiesEXT(
+        VkImage image, VkImageDrmFormatModifierPropertiesEXT* props) const noexcept;
+
     VkResult AllocateMemory(const VkMemoryAllocateInfo& ai, DeviceMemory&) const noexcept;
 
     VkResult CreateCommandPool(const VkCommandPoolCreateInfo& ci, CommandPool&) const;
@@ -498,6 +507,7 @@ public:
     VkResult CreateShaderModule(const VkShaderModuleCreateInfo& ci, ShaderModule&) const noexcept;
 
     VkResult CreateSemaphore(const VkSemaphoreCreateInfo& ci, Semaphore&) const noexcept;
+    VkResult GetSemaphoreFdKHR(const VkSemaphoreGetFdInfoKHR& gi, int* fd) const noexcept;
 
     VkResult CreateImage(const VkImageCreateInfo& ci, Image&) const noexcept;
 

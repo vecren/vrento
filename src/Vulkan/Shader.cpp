@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <glslang/Include/Types.h>
+#include <glslang/MachineIndependent/localintermediate.h>
 #include <glslang/MachineIndependent/iomapper.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include "Spv.hpp"
@@ -13,7 +14,7 @@
 #include "Core/StringHelper.hpp"
 #include "Utils/Sha.hpp"
 #include "Core/MapSet.hpp"
-#include <SPIRV-Reflect/spirv_reflect.h>
+#include <spirv_reflect.h>
 
 using namespace wallpaper;
 using namespace wallpaper::vulkan;
