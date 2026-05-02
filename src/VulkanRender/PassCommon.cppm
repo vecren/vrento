@@ -1,13 +1,18 @@
-#pragma once
-#include "Vulkan/Instance.hpp"
-#include "Type.hpp"
-#include "Vulkan/TextureCache.hpp"
-#include "Scene/SceneRenderTarget.h"
+module;
 
-namespace wallpaper
+#include <vulkan/vulkan.h>
+
+#include "Type.hpp"
+
+#include "Swapchain/ExSwapchain.hpp"
+
+export module wescene.vulkan_render:pass_common;
+import wescene.vulkan;
+import wescene.scene;
+
+export namespace wallpaper::vulkan
 {
-namespace vulkan
-{
+
 inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
     state.blendEnable  = true;
     state.colorBlendOp = VK_BLEND_OP_ADD;
@@ -53,5 +58,5 @@ inline TextureKey ToTexKey(wallpaper::SceneRenderTarget rt) {
         .mipmap_level = rt.mipmap_level,
     };
 }
-} // namespace vulkan
-} // namespace wallpaper
+
+} // namespace wallpaper::vulkan

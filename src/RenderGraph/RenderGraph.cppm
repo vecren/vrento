@@ -1,18 +1,24 @@
-#pragma once
+module;
 
-#include "PassNode.hpp"
-
-#include "TexNode.hpp"
-#include "Core/MapSet.hpp"
+#include <memory>
 #include <span>
+#include <string_view>
+#include <vector>
 
-namespace wallpaper
-{
-namespace rg
+#include "Core/MapSet.hpp"
+#include "RenderGraph/Pass.hpp"
+
+export module wescene.rgraph:render_graph;
+
+import :dependency_graph;
+import :pass_node;
+import :tex_node;
+
+export namespace wallpaper::rg
 {
 
-class Pass;
 class RenderGraph;
+
 class RenderGraphBuilder {
 public:
     RenderGraphBuilder(RenderGraph&);
@@ -87,5 +93,4 @@ private:
     Map<NodeID, std::shared_ptr<Pass>> m_map_pass;
 };
 
-} // namespace rg
-} // namespace wallpaper
+} // namespace wallpaper::rg

@@ -1,22 +1,27 @@
-#pragma once
-#include "RenderGraph/Pass.hpp"
+module;
+
+#include <algorithm>
+#include <iterator>
 #include <span>
-#include <vector>
 #include <string>
 #include <string_view>
-#include <algorithm>
+#include <vector>
 
-namespace wallpaper
+#include "RenderGraph/Pass.hpp"
+
+#include "Swapchain/ExSwapchain.hpp"
+
+export module wescene.vulkan_render:vulkan_pass;
+import wescene.vulkan;
+import wescene.scene;
+
+import :resource;
+
+export namespace wallpaper
 {
-
-class Scene;
 
 namespace vulkan
 {
-
-class Device;
-class RenderingResources;
-class Resource;
 
 class VulkanPass : public rg::Pass {
 public:
@@ -43,5 +48,6 @@ private:
     bool                     m_prepared { false };
     std::vector<std::string> m_release_texs;
 };
+
 } // namespace vulkan
 } // namespace wallpaper

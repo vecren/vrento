@@ -1,14 +1,22 @@
-#pragma once
-#include "VulkanPass.hpp"
-#include <string>
+module;
 
-#include "Vulkan/Device.hpp"
+#include <string>
+#include <string_view>
+
+#include <vulkan/vulkan.h>
 
 #include "SpecTexs.hpp"
 
-namespace wallpaper
-{
-namespace vulkan
+#include "Swapchain/ExSwapchain.hpp"
+
+export module wescene.vulkan_render:pre_pass;
+import wescene.vulkan;
+import wescene.scene;
+
+import :vulkan_pass;
+import :resource;
+
+export namespace wallpaper::vulkan
 {
 
 class PrePass : public VulkanPass {
@@ -26,8 +34,6 @@ public:
     PrePass(const Desc&);
     virtual ~PrePass();
 
-    // void setClearValue(vk::ClearValue);
-
     void prepare(Scene&, const Device&, RenderingResources&) override;
     void execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
@@ -36,5 +42,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace vulkan
-} // namespace wallpaper
+} // namespace wallpaper::vulkan

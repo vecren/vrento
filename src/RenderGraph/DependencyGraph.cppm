@@ -1,4 +1,5 @@
-#pragma once
+module;
+
 #include <cstdint>
 #include <vector>
 #include <numeric>
@@ -10,9 +11,9 @@
 #include "Core/Literals.hpp"
 #include "Core/NoCopyMove.hpp"
 
-namespace wallpaper
-{
-namespace rg
+export module wescene.rgraph:dependency_graph;
+
+export namespace wallpaper::rg
 {
 
 typedef size_t NodeID;
@@ -55,7 +56,6 @@ public:
                 return sum + v.size();
             });
     }
-    // const Node& GetNode(NodeID i) const { return *m_nodes[i]; }
     Node* GetNode(NodeID i) const { return m_nodes[i].get(); }
 
     std::vector<NodeID> GetNodeOut(NodeID) const;
@@ -73,5 +73,5 @@ private:
     std::vector<std::unordered_set<NodeID>> m_nodeNext;
     std::vector<std::unique_ptr<Node>>      m_nodes;
 };
-} // namespace rg
-} // namespace wallpaper
+
+} // namespace wallpaper::rg

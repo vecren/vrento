@@ -1,29 +1,28 @@
-#pragma once
-#include "VulkanPass.hpp"
+module;
+
+#include <cstdint>
 #include <string>
+#include <string_view>
 
-#include "Vulkan/Device.hpp"
+#include <vulkan/vulkan.h>
 
-#include "Scene/Scene.h"
 #include "SpecTexs.hpp"
 
-namespace wallpaper
-{
-namespace vulkan
+#include "Swapchain/ExSwapchain.hpp"
+
+export module wescene.vulkan_render:fin_pass;
+import wescene.vulkan;
+import wescene.scene;
+
+import :vulkan_pass;
+import :resource;
+
+export namespace wallpaper::vulkan
 {
 
 // Final pass: blit the scene render target into the present buffer
 // (offscreen ExSwapchain slot or surface-mode swapchain image), then
 // emit the appropriate barrier so the consumer reads coherent pixels.
-//
-// Implemented as a pure transfer pass (vkCmdBlitImage) — no
-// renderpass, pipeline, shader, or descriptor. Per-frame state is just
-// the chosen present image, set via setPresent before each execute().
-//
-// The blit handles cross-format channel reordering (R8G8B8A8 ↔
-// B8G8R8A8) automatically because vkCmdBlitImage maps logical RGBA
-// channels rather than raw bytes. So no rebuild is needed when the
-// bridge renegotiates between ABGR/ARGB families.
 class FinPass : public VulkanPass {
 public:
     struct Desc {
@@ -36,8 +35,7 @@ public:
         // set per-frame via setPresent()
         ImageParameters vk_present;
 
-        // configured once at init by VulkanRender (from
-        // ExSwapchain::producerOutputLayout / releaseTargetQueueFamily)
+        // configured once at init by VulkanRender
         VkImageLayout present_layout    { VK_IMAGE_LAYOUT_UNDEFINED };
         uint32_t      present_queue_index { 0 };
     };
@@ -57,5 +55,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace vulkan
-} // namespace wallpaper
+} // namespace wallpaper::vulkan

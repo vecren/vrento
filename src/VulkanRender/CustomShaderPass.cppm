@@ -1,19 +1,23 @@
-#pragma once
-#include "VulkanPass.hpp"
+module;
+
+#include <functional>
 #include <string>
 #include <vector>
 
-#include "Vulkan/Device.hpp"
-#include "Scene/Scene.h"
-#include "Vulkan/StagingBuffer.hpp"
-#include "Vulkan/GraphicsPipeline.hpp"
+#include <vulkan/vulkan.h>
+
 #include "SpriteAnimation.hpp"
-#include "Interface/IShaderValueUpdater.h"
 
-namespace wallpaper
-{
+#include "Swapchain/ExSwapchain.hpp"
 
-namespace vulkan
+export module wescene.vulkan_render:custom_shader_pass;
+import wescene.vulkan;
+import wescene.scene;
+
+import :vulkan_pass;
+import :resource;
+
+export namespace wallpaper::vulkan
 {
 
 class CustomShaderPass : public VulkanPass {
@@ -61,5 +65,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace vulkan
-} // namespace wallpaper
+} // namespace wallpaper::vulkan

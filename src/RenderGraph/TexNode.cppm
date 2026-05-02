@@ -1,10 +1,13 @@
-#pragma once
-#include "DependencyGraph.hpp"
-#include <string>
+module;
 
-namespace wallpaper
-{
-namespace rg
+#include <string>
+#include <string_view>
+
+export module wescene.rgraph:tex_node;
+
+import :dependency_graph;
+
+export namespace wallpaper::rg
 {
 
 class RenderGraphBuilder;
@@ -12,24 +15,25 @@ class PassNode;
 
 class TexNode : public DependencyGraph::Node {
 public:
-    enum class TexType {
+    enum class TexType
+    {
         Imported,
         Temp
     };
     struct Desc {
         std::string name;
         std::string key;
-        TexType type;
+        TexType     type;
     };
     static TexNode* addTexNode(DependencyGraph& dg, const Desc& type);
     static TexNode* addNewVersion(DependencyGraph& dg, TexNode* pre);
 
-    TexType type() const;
+    TexType          type() const;
     std::string_view name() const;
     std::string_view key() const;
-    size_t version() const;
-    PassNode* writer() const;
-    Desc genDesc() const;
+    size_t           version() const;
+    PassNode*        writer() const;
+    Desc             genDesc() const;
 
     TexNode* preVer() const;
     TexNode* nextVer() const;
@@ -38,17 +42,18 @@ public:
     void setKey(std::string_view);
     void setWriter(PassNode*);
 
-    std::string ToGraphviz() const override; 
+    std::string ToGraphviz() const override;
+
 private:
     friend class RenderGraphBuilder;
-    TexType m_type;
+    TexType     m_type;
     std::string m_key;
-    std::string m_name {"unknown tex"};
+    std::string m_name { "unknown tex" };
 
-    size_t    m_version {0};
-    TexNode*  m_pre    {nullptr};
-    TexNode*  m_next    {nullptr};
-    PassNode* m_writer  {nullptr};
+    size_t    m_version { 0 };
+    TexNode*  m_pre { nullptr };
+    TexNode*  m_next { nullptr };
+    PassNode* m_writer { nullptr };
 };
-}
-} 
+
+} // namespace wallpaper::rg

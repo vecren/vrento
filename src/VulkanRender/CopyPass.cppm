@@ -1,13 +1,18 @@
-#pragma once
-#include "VulkanPass.hpp"
+module;
+
 #include <string>
 
-#include "Vulkan/Device.hpp"
-#include "Scene/Scene.h"
 
-namespace wallpaper
-{
-namespace vulkan
+#include "Swapchain/ExSwapchain.hpp"
+
+export module wescene.vulkan_render:copy_pass;
+import wescene.vulkan;
+import wescene.scene;
+
+import :vulkan_pass;
+import :resource;
+
+export namespace wallpaper::vulkan
 {
 
 class CopyPass : public VulkanPass {
@@ -31,5 +36,4 @@ private:
     Desc m_desc;
 };
 
-}
-}
+} // namespace wallpaper::vulkan
