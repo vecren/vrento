@@ -10,9 +10,6 @@ module;
 
 #include "vk_mem_alloc.h"
 
-#include <glslang/Include/BaseTypes.h>
-#include <glslang/Public/ShaderLang.h>
-
 #include "Type.hpp"
 #include "Image.hpp"
 #include "Core/Literals.hpp"
@@ -33,6 +30,12 @@ module;
 export module wescene.vulkan;
 import cppstd;
 import wescene.utils;
+
+// Re-export the host-only shader compile API. Lets existing consumers
+// (VulkanRender/* etc.) keep their `import wescene.vulkan;` without
+// caring that ShaderSpv / ShaderReflected / Preprocess / etc. now live
+// in a separate module.
+export import wescene.shader_compile;
 
 // =================================================================
 // Layer 1: vvk:: low-level Vulkan C++ wrapper
@@ -1119,16 +1122,7 @@ private:
     Set<std::string> m_layers;
 };
 
-// ---------- Spv.hpp ----------
-
-struct ShaderSpv {
-    std::string entry_point { "main" };
-    ShaderType  stage;
-
-    std::vector<unsigned int> spirv;
-};
-
-using Uni_ShaderSpv = std::unique_ptr<ShaderSpv>;
+// ShaderSpv / Uni_ShaderSpv now live in wescene.shader_compile (re-exported above).
 
 // ---------- Parameters.hpp ----------
 
@@ -1511,65 +1505,9 @@ private:
     Map<VkShaderStageFlagBits, Uni_ShaderSpv>        m_stage_spv_map;
 };
 
-// ---------- Shader.hpp ----------
-
-VkFormat ToVkType(glslang::TBasicType, size_t);
-
-struct ShaderReflected {
-    struct BlockedUniform {
-        int    block_index;
-        uint   offset;
-        size_t size { 0 };
-        size_t num { 1 };
-    };
-    struct Block {
-        int         index;
-        uint        size;
-        std::string name;
-
-        Map<std::string, BlockedUniform> member_map;
-    };
-    std::vector<Block> blocks;
-
-    Map<std::string, VkDescriptorSetLayoutBinding> binding_map;
-
-    struct Input {
-        uint     location;
-        VkFormat format;
-    };
-    Map<std::string, Input> input_location_map;
-};
-
-bool GenReflect(std::span<const std::vector<uint>> codes, std::vector<Uni_ShaderSpv>& spvs,
-                ShaderReflected& ref);
-
-// ---------- ShaderComp.hpp ----------
-
-extern const TBuiltInResource DefaultTBuiltInResource;
-
-struct ShaderCompUnit {
-    EShLanguage stage;
-    std::string src;
-};
-
-struct ShaderCompOpt {
-    glslang::EShTargetClientVersion client_ver;
-
-    bool hlsl { false };
-    bool auto_map_locations { false };
-    bool auto_map_bindings { false };
-    bool suppress_warnings_glsl { false };
-    bool relaxed_errors_glsl { false };
-    bool relaxed_rules_vulkan { false };
-    uint global_uniform_binding { 0 };
-
-    bool reflect_all_io_var { true };
-    bool reflect_all_block_var { false };
-};
-
-bool CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> compUnits,
-                               const ShaderCompOpt&            opt,
-                               std::vector<Uni_ShaderSpv>&     spvs);
+// ShaderReflected / GenReflect / VulkanTarget / ShaderCompUnit / ShaderCompOpt /
+// CompileAndLinkShaderUnits / Preprocess all live in wescene.shader_compile
+// (re-exported above).
 
 // ---------- VertexInputState.hpp ----------
 
