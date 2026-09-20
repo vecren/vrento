@@ -22,18 +22,3 @@ rstd-cppstd = { version = "0.1.0", pub = true }
 rstd-log = { version = "0.1.0", pub = true }
 vvk = { git = "https://github.com/litocpp/vvk.git", pub = true }
 wavsen = { git = "https://github.com/hypengw/wavsen.git" }
-spirv-reflect = { git = "https://github.com/hypengw/SPIRV-Reflect.git", branch = "toml" }
-
-[external-sources.glslang]
-git = "https://github.com/KhronosGroup/glslang.git"
-rev = "275822a6261ee689aadb1da5f09a0ec2f058685c"
-
-[external-dependencies.cmake.glslang]
-package = "glslang"
-source = "glslang"
-cache = { ENABLE_GLSLANG_BINARIES = false, ENABLE_HLSL = true, ENABLE_OPT = false, ENABLE_CTEST = false, BUILD_EXTERNAL = false, GLSLANG_TESTS = false, BUILD_TESTING = false }
-targets = [
-  { name = "glslang::glslang", pub = true },
-  { name = "glslang::SPIRV", pub = true },
-  { name = "glslang::glslang-default-resource-limits", pub = true },
-]

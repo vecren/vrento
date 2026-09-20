@@ -1,11 +1,5 @@
 module;
 
-// Vulkan headers only — no dispatch / loader. ShaderReflected exposes
-// VkDescriptorSetLayoutBinding and VkFormat, which SPIRV-Reflect produces
-// natively, so consumers can hand the reflection straight to a pipeline
-// builder without translating types. We do NOT link Vulkan_LIBRARIES from
-// this module's target; downstream binaries that only want shader
-// compilation get the headers but no libvulkan dependency.
 export module wescene.shader_compile;
 import wescene.core;
 export import vvk;
@@ -71,9 +65,6 @@ struct ShaderReflected {
     Map<std::string, Input> input_location_map;
 };
 
-bool GenReflect(std::span<const std::vector<unsigned int>> codes, std::vector<Uni_ShaderSpv>& spvs,
-                ShaderReflected& ref);
-
 // ---------- ShaderComp.hpp ----------
 
 enum class VulkanTarget : unsigned
@@ -102,14 +93,34 @@ struct ShaderCompOpt {
     bool         optimize { false };
 };
 
-bool CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> compUnits, const ShaderCompOpt& opt,
-                               std::vector<Uni_ShaderSpv>& spvs);
+struct ShaderBackend {
+    using Trait                  = ShaderBackend;
+    static constexpr bool direct = false;
 
-// Expand every `#if`, `#include` and `#define` in `src` so downstream
-// regex passes see only live declarations with macros already resolved
-// (e.g. `g_Bones[BONECOUNT]` becomes `g_Bones[4]`, `#if SKINNING=0`
-// blocks vanish entirely). `lang` selects glslang's GLSL vs HLSL
-// preprocessor. On failure returns false and leaves `out` untouched.
-bool Preprocess(std::string_view src, ShaderType stage, SourceLang lang, std::string& out);
+    template<typename Self, typename = void>
+    struct Api {
+        using Trait = ShaderBackend;
+
+        // On failure, callers discard the output arguments.
+        bool Preprocess(std::string_view src, ShaderType stage, SourceLang lang,
+                        std::string& out) const {
+            return rstd::trait_call<0>(this, src, stage, lang, out);
+        }
+
+        bool CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> units,
+                                       const ShaderCompOpt&            opt,
+                                       std::vector<Uni_ShaderSpv>&     spvs) const {
+            return rstd::trait_call<1>(this, units, opt, spvs);
+        }
+
+        bool GenReflect(std::span<const std::vector<unsigned int>> codes,
+                        std::vector<Uni_ShaderSpv>& spvs, ShaderReflected& reflected) const {
+            return rstd::trait_call<2>(this, codes, spvs, reflected);
+        }
+    };
+
+    template<typename T>
+    using Funcs = rstd::TraitFuncs<&T::Preprocess, &T::CompileAndLinkShaderUnits, &T::GenReflect>;
+};
 
 } // namespace owe::vulkan

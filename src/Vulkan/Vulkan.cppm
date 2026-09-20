@@ -1158,10 +1158,6 @@ private:
     Map<VkShaderStageFlagBits, Uni_ShaderSpv>        m_stage_spv_map;
 };
 
-// ShaderReflected / GenReflect / VulkanTarget / ShaderCompUnit / ShaderCompOpt /
-// CompileAndLinkShaderUnits / Preprocess all live in wescene.shader_compile
-// (re-exported above).
-
 // ---------- VertexInputState.hpp ----------
 
 struct VertexInputState {
