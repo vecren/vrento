@@ -214,7 +214,8 @@ struct Impl<vrento::resource_registry::TextureStatePreparer,
         return this->self().Prepare(use, target, range, discard);
     }
 
-    bool Set(vrento::resource::TextureUseHandle use, vrento::resource_registry::TextureStateKind state) {
+    bool Set(vrento::resource::TextureUseHandle          use,
+             vrento::resource_registry::TextureStateKind state) {
         return this->self().Set(use, state);
     }
 };

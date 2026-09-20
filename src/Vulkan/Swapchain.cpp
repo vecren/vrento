@@ -4,7 +4,7 @@ module;
 #include "vvk/macros.hpp"
 
 module vrento.vulkan;
-import vrento.types;
+
 import rstd;
 import rstd.log;
 import rstd.cppstd;

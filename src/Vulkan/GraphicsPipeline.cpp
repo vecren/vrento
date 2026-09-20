@@ -6,8 +6,7 @@ module;
 #include "vvk/macros.hpp"
 
 module vrento.vulkan;
-import vrento.core;
-import vrento.types;
+import vrento.shader_types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
@@ -103,7 +102,7 @@ void GraphicsPipeline::toDefault() {
 }
 
 const ShaderSpv* GraphicsPipeline::getShaderSpv(VkShaderStageFlagBits stage) const {
-    if (exists(m_stage_spv_map, stage)) {
+    if (m_stage_spv_map.contains(stage)) {
         return m_stage_spv_map.at(stage).as_ptr().as_raw_ptr();
     }
     return nullptr;

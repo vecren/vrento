@@ -636,8 +636,9 @@ struct Impl<vrento::resource_registry::GraphicsResourcePreparer,
                             vrento::resource::RenderPassUseHandle                  render_pass_use,
                             const vrento::vulkan::Device&                          device,
                             std::vector<vrento::vulkan::FramebufferAttachmentDesc> attachments,
-                            VkExtent2D                                          extent)
-        -> Result<vrento::resource_registry::FramebufferPreparation, vrento::resource::ResourceError> {
+                            VkExtent2D                                             extent)
+        -> Result<vrento::resource_registry::FramebufferPreparation,
+                  vrento::resource::ResourceError> {
         return this->self().PrepareFramebuffer(
             framebuffer_use, render_pass_use, device, rstd::move(attachments), extent);
     }
@@ -645,7 +646,8 @@ struct Impl<vrento::resource_registry::GraphicsResourcePreparer,
     auto PrepareRenderPass(vrento::resource::RenderPassUseHandle         use,
                            const vrento::vulkan::Device&                 device,
                            const vrento::vulkan::RenderPassResourceDesc& desc)
-        -> Result<vrento::resource_registry::RenderPassPreparation, vrento::resource::ResourceError> {
+        -> Result<vrento::resource_registry::RenderPassPreparation,
+                  vrento::resource::ResourceError> {
         return this->self().PrepareRenderPass(use, device, desc);
     }
 

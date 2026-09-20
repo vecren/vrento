@@ -1,7 +1,7 @@
 module;
 
 module vrento.vulkan;
-import vrento.types;
+
 import rstd.cppstd;
 
 namespace vrento

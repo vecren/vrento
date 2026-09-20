@@ -6,8 +6,7 @@ module;
 #include "vvk/macros.hpp"
 
 module vrento.vulkan;
-import vrento.core;
-import vrento.types;
+
 import rstd;
 import rstd.log;
 import rstd.cppstd;
@@ -18,7 +17,7 @@ using namespace vrento::vulkan;
 namespace
 {
 
-void EnumateDeviceExts(const vvk::PhysicalDevice& gpu, vrento::Set<std::string>& set) {
+void EnumateDeviceExts(const vvk::PhysicalDevice& gpu, std::set<std::string, std::less<>>& set) {
     rstd::vec::Vec<VkExtensionProperties> properties;
     VVK_CHECK_VOID_RE(gpu.EnumerateDeviceExtensionProperties(properties));
     for (auto& ext : properties) set.insert(ext.extensionName);
@@ -45,12 +44,12 @@ bool Device::CheckGPU(vvk::PhysicalDevice gpu, std::span<const Extension> exts,
     if (! has_graphics_queue) return false;
     if (surface && ! has_present_queue) return false;
 
-    Set<std::string> extensions;
+    std::set<std::string, std::less<>> extensions;
     EnumateDeviceExts(gpu, extensions);
     bool requires_timeline_semaphore { false };
     for (auto& ext : exts) {
         if (ext.required) {
-            if (! exists(extensions, ext.name)) return false;
+            if (! extensions.contains(ext.name)) return false;
             if (std::string_view(ext.name) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) {
                 requires_timeline_semaphore = true;
             }
@@ -124,7 +123,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
     device.m_enabled_instance_extensions.assign(inst.enabled_extensions().begin(),
                                                 inst.enabled_extensions().end());
 
-    Set<std::string> tested_exts;
+    std::set<std::string, std::less<>> tested_exts;
     {
         EnumateDeviceExts(inst.gpu(), device.m_extensions);
         for (auto& ext : exts) {
@@ -176,7 +175,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
     }
 #endif
     const bool enable_shader_output_viewport_index =
-        exists(tested_exts, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+        tested_exts.contains(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
     const bool enable_multi_viewport =
         enable_shader_output_viewport_index && supported2.features.multiViewport;
     const auto d32_features =
@@ -200,7 +199,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .pNext             = nullptr,
         .timelineSemaphore = VK_TRUE,
     };
-    const bool enable_sync2 = exists(tested_exts, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME) &&
+    const bool enable_sync2 = tested_exts.contains(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME) &&
                               supported_sync2.synchronization2;
     VkPhysicalDeviceSynchronization2FeaturesKHR enabled_sync2 {
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
@@ -238,7 +237,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
     device.m_graphics_queue.handle = device.m_device.GetQueue(device.m_graphics_queue.family_index);
     device.m_present_queue.handle  = device.m_device.GetQueue(device.m_present_queue.family_index);
     rstd::uint32_t max_push_descriptors {};
-    if (exists(tested_exts, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) {
+    if (tested_exts.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) {
         VkPhysicalDevicePushDescriptorPropertiesKHR push_properties {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR,
         };
@@ -253,7 +252,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .timeline_semaphore           = true,
         .geometry_shader              = supported2.features.geometryShader != VK_FALSE,
         .synchronization2             = enable_sync2,
-        .push_descriptor              = exists(tested_exts, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
+        .push_descriptor              = tested_exts.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
         .max_push_descriptors         = max_push_descriptors,
         .multi_viewport               = enable_multi_viewport,
         .shader_output_viewport_index = enable_shader_output_viewport_index,
@@ -261,12 +260,13 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         .depth_clamp                  = supported2.features.depthClamp != VK_FALSE,
         .max_geometry_output_vertices = device.m_limits.maxGeometryOutputVertices,
         .max_geometry_total_output_components = device.m_limits.maxGeometryTotalOutputComponents,
-        .memory_budget      = exists(tested_exts, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME),
-        .external_memory_fd = exists(tested_exts, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME),
+        .memory_budget      = tested_exts.contains(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME),
+        .external_memory_fd = tested_exts.contains(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME),
         .external_memory_dma_buf =
-            exists(tested_exts, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME),
-        .drm_format_modifier = exists(tested_exts, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME),
-        .foreign_queue       = exists(tested_exts, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME),
+            tested_exts.contains(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME),
+        .drm_format_modifier =
+            tested_exts.contains(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME),
+        .foreign_queue         = tested_exts.contains(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME),
         .graphics_queue_family = device.m_graphics_queue.family_index,
         .present_queue_family  = device.m_present_queue.family_index,
     };
@@ -316,4 +316,4 @@ void Device::Destroy() { VVK_CHECK(m_device.WaitIdle()); }
 Device::Device() = default;
 Device::~Device() {}
 
-bool Device::supportExt(std::string_view name) const { return exists(m_extensions, name); }
+bool Device::supportExt(std::string_view name) const { return m_extensions.contains(name); }

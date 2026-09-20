@@ -9,8 +9,7 @@ module;
 #endif
 
 module vrento.vulkan;
-import vrento.core;
-import vrento.types;
+
 import rstd;
 import rstd.log;
 import rstd.cppstd;
@@ -128,12 +127,12 @@ bool CreateInstance(vvk::Instance* inst, std::span<const std::string_view> exts,
     }
     return true;
 }
-void EnumateExts(vrento::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
+void EnumateExts(std::set<std::string, std::less<>>& set, const vvk::GlobalDispatch& dld) {
     if (auto rv = vvk::EnumerateInstanceExtensionProperties(dld); rv.is_some()) {
         for (const auto& ext : *rv) set.insert(ext.extensionName);
     }
 }
-void EnumateLayers(vrento::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
+void EnumateLayers(std::set<std::string, std::less<>>& set, const vvk::GlobalDispatch& dld) {
     if (auto rv = vvk::EnumerateInstanceLayerProperties(dld); rv.is_some()) {
         for (const auto& ext : *rv) set.insert(ext.layerName);
     }
@@ -195,8 +194,8 @@ void Instance::setSurface(VkSurfaceKHR sf) {
     m_surface = vvk::SurfaceKHR(sf, *m_vinst, m_vinst.Dispatch());
 }
 
-bool Instance::supportExt(std::string_view name) const { return exists(m_extensions, name); }
-bool Instance::supportLayer(std::string_view name) const { return exists(m_layers, name); }
+bool Instance::supportExt(std::string_view name) const { return m_extensions.contains(name); }
+bool Instance::supportLayer(std::string_view name) const { return m_layers.contains(name); }
 
 void Instance::Destroy() {}
 
@@ -211,7 +210,7 @@ bool Instance::Create(Instance& inst, std::span<const Extension> instExts,
     const auto& global = inst.m_loader->global();
 
     EnumateExts(inst.m_extensions, global);
-    Set<std::string>                           exts, layers;
+    std::set<std::string, std::less<>>         exts, layers;
     rstd::array<std::span<const Extension>, 2> test_exts_array {
         std::span<const Extension>(base_inst_exts.data(), base_inst_exts.len().to_primitive()),
         instExts

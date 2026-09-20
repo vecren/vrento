@@ -605,7 +605,7 @@ void ImageUploadManager::destroy() {
 
 Option<ImageUploadTicket>
 ImageUploadManager::QueueWrite(rstd::sync::Arc<TextureAllocation> allocation, const Image& image) {
-    if (! m_impl->initialized || image.header.type == ImageType::VIDEO) return None();
+    if (! m_impl->initialized || image.header.kind == ImageKind::Video) return None();
     auto destinations = allocation->View();
     if (destinations.slots.size() != image.slots.size() || destinations.slots.empty()) {
         return None();
@@ -879,11 +879,11 @@ void ImageUploadManager::Trim() {
 }
 
 auto ImagePrepareContext::CreateImportedTexture(
-    ref<Image> image, Option<rstd::sync::Arc<VideoPlaybackState>> playback)
+    ref<Image> image, Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
     -> Option<PreparedImageAllocation> {
     auto allocation = m_textures.AllocateImportedTexture(*image, rstd::move(playback));
     if (allocation.is_none()) return None();
-    if (image->header.type == ImageType::VIDEO) {
+    if (image->header.kind == ImageKind::Video) {
         return Some(PreparedImageAllocation {
             .allocation = rstd::move(*allocation),
         });

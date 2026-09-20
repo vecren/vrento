@@ -7,11 +7,12 @@ module;
 #include "vvk/macros.hpp"
 
 export module vrento.vulkan;
-import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import vrento.types;
+import vrento.texture_types;
+import vrento.image;
+import vrento.video_playback;
 
 // Vulkan FFI: vvk::ffi::vulkan exposes the full Vk symbol surface as
 // a comprehensive FFI module. Re-exported so downstream consumers
@@ -430,10 +431,10 @@ private:
     vvk::PhysicalDevice      m_gpu {};
     rstd::uint32_t           m_api_version { WP_VULKAN_VERSION };
 
-    vvk::SurfaceKHR          m_surface {};
-    Set<std::string>         m_extensions;
-    std::vector<std::string> m_enabled_extensions;
-    Set<std::string>         m_layers;
+    vvk::SurfaceKHR                    m_surface {};
+    std::set<std::string, std::less<>> m_extensions;
+    std::vector<std::string>           m_enabled_extensions;
+    std::set<std::string, std::less<>> m_layers;
 };
 
 // ShaderSpv / Uni_ShaderSpv now live in vrento.shader_compile (re-exported above).
@@ -464,13 +465,15 @@ struct BufferParameters {
         : handle(o.handle.handle()), req_size(o.req_size) {}
 };
 
-struct AllocatedImageParameters : NoCopy {
-    vvk::AllocatedImage handle;
-    vvk::ImageView      view;
-    vvk::Sampler        sampler;
-    VkExtent3D          extent;
-    unsigned            mipmap_level { 1 };
-    u64                 generation { 0 };
+struct AllocatedImageParameters {
+    AllocatedImageParameters(const AllocatedImageParameters&)            = delete;
+    AllocatedImageParameters& operator=(const AllocatedImageParameters&) = delete;
+    vvk::AllocatedImage       handle;
+    vvk::ImageView            view;
+    vvk::Sampler              sampler;
+    VkExtent3D                extent;
+    unsigned                  mipmap_level { 1 };
+    u64                       generation { 0 };
 
     AllocatedImageParameters();
     ~AllocatedImageParameters();
@@ -478,7 +481,9 @@ struct AllocatedImageParameters : NoCopy {
     AllocatedImageParameters& operator=(AllocatedImageParameters&& o) noexcept;
 };
 
-struct ExImageParameters : NoCopy {
+struct ExImageParameters {
+    ExImageParameters(const ExImageParameters&)              = delete;
+    ExImageParameters&   operator=(const ExImageParameters&) = delete;
     vvk::DeviceMemory    mem {};
     VkMemoryRequirements mem_reqs {};
 
@@ -526,7 +531,9 @@ inline ImageParameters ToImageParameters(const ExImageParameters& o) noexcept {
     return out;
 }
 
-struct ImageSlots : NoCopy {
+struct ImageSlots {
+    ImageSlots(const ImageSlots&)                                      = delete;
+    ImageSlots&                           operator=(const ImageSlots&) = delete;
     std::vector<AllocatedImageParameters> slots;
 
     ImageSlots();
@@ -617,8 +624,12 @@ struct TextureKey {
     static TexHash HashValue(const TextureKey&);
 };
 
-class TextureCache : NoCopy, NoMove {
+class TextureCache {
 public:
+    TextureCache(const TextureCache&)            = delete;
+    TextureCache& operator=(const TextureCache&) = delete;
+    TextureCache(TextureCache&&)                 = delete;
+    TextureCache& operator=(TextureCache&&)      = delete;
     struct VideoRegistry;
 
     struct VideoDecodeOptions {
@@ -635,7 +646,8 @@ public:
 
     Option<ExImageParameters> CreateExTex(u32 witdh, u32 height, VkFormat, VkImageTiling);
     rstd::Option<rstd::sync::Arc<TextureAllocation>>
-    AllocateImportedTexture(const Image&, Option<rstd::sync::Arc<VideoPlaybackState>> playback);
+    AllocateImportedTexture(const Image&,
+                            Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback);
     rstd::Option<rstd::sync::Arc<TextureAllocation>> AllocateTexture(TextureKey);
 
     /* Per-frame hook: advance every registered video-tex by `dt_seconds`,
@@ -658,7 +670,7 @@ private:
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
     rstd::Option<rstd::sync::Arc<TextureAllocation>>
-         CreateVideoTex(const Image&, Option<rstd::sync::Arc<VideoPlaybackState>> playback);
+         CreateVideoTex(const Image&, Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback);
     void allocateCmd();
     vvk::CommandBuffers m_tex_cmds;
     vvk::CommandBuffer  m_tex_cmd;
@@ -687,9 +699,11 @@ struct PreparedImageAllocation {
 
 class ImageUploadManager;
 
-class RecordedImageUploads : NoCopy {
+class RecordedImageUploads {
 public:
-    RecordedImageUploads() = default;
+    RecordedImageUploads(const RecordedImageUploads&)            = delete;
+    RecordedImageUploads& operator=(const RecordedImageUploads&) = delete;
+    RecordedImageUploads()                                       = default;
     ~RecordedImageUploads();
 
     RecordedImageUploads(RecordedImageUploads&&) noexcept;
@@ -709,9 +723,11 @@ private:
     std::shared_ptr<State> m_state;
 };
 
-class ImageUploadBatchLease : NoCopy {
+class ImageUploadBatchLease {
 public:
-    ImageUploadBatchLease() = default;
+    ImageUploadBatchLease(const ImageUploadBatchLease&)            = delete;
+    ImageUploadBatchLease& operator=(const ImageUploadBatchLease&) = delete;
+    ImageUploadBatchLease()                                        = default;
     ~ImageUploadBatchLease();
 
     ImageUploadBatchLease(ImageUploadBatchLease&&) noexcept;
@@ -727,8 +743,12 @@ private:
     std::shared_ptr<RecordedImageUploads::State> m_state;
 };
 
-class ImageUploadManager : NoCopy, NoMove {
+class ImageUploadManager {
 public:
+    ImageUploadManager(const ImageUploadManager&)            = delete;
+    ImageUploadManager& operator=(const ImageUploadManager&) = delete;
+    ImageUploadManager(ImageUploadManager&&)                 = delete;
+    ImageUploadManager& operator=(ImageUploadManager&&)      = delete;
     explicit ImageUploadManager(const Device&);
     ~ImageUploadManager();
 
@@ -757,8 +777,8 @@ public:
     ImagePrepareContext(TextureCache& textures, ImageUploadManager& uploads)
         : m_textures(textures), m_uploads(uploads) {}
 
-    auto CreateImportedTexture(ref<Image>                                  image,
-                               Option<rstd::sync::Arc<VideoPlaybackState>> playback)
+    auto CreateImportedTexture(ref<Image>                                        image,
+                               Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
         -> Option<PreparedImageAllocation>;
     auto AllocateTexture(TextureKey key) -> Option<rstd::sync::Arc<TextureAllocation>>;
     auto AllocateTransparentTexture(TextureKey key) -> Option<PreparedImageAllocation>;
@@ -776,8 +796,8 @@ struct ImagePrepareBackend {
     struct Api {
         using Trait = ImagePrepareBackend;
 
-        auto CreateImportedTexture(rstd::ref<Image>                            image,
-                                   Option<rstd::sync::Arc<VideoPlaybackState>> playback)
+        auto CreateImportedTexture(rstd::ref<Image>                                  image,
+                                   Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
             -> rstd::Option<PreparedImageAllocation> {
             return rstd::trait_call<0>(this, image, rstd::move(playback));
         }
@@ -853,8 +873,12 @@ struct MemoryBudgetSource {
 
 struct PipelineParameters;
 
-class Device : NoCopy, NoMove {
+class Device {
 public:
+    Device(const Device&)            = delete;
+    Device& operator=(const Device&) = delete;
+    Device(Device&&)                 = delete;
+    Device& operator=(Device&&)      = delete;
     Device();
     ~Device();
 
@@ -902,11 +926,11 @@ private:
     vvk::PhysicalDevice          m_gpu;
     vvk::MemoryAllocator         m_allocator;
 
-    VkPhysicalDeviceLimits   m_limits;
-    DeviceCapabilities       m_capabilities;
-    Set<std::string>         m_extensions;
-    std::vector<std::string> m_enabled_instance_extensions;
-    std::vector<std::string> m_enabled_device_extensions;
+    VkPhysicalDeviceLimits             m_limits;
+    DeviceCapabilities                 m_capabilities;
+    std::set<std::string, std::less<>> m_extensions;
+    std::vector<std::string>           m_enabled_instance_extensions;
+    std::vector<std::string>           m_enabled_device_extensions;
 
     Swapchain m_swapchain;
 
@@ -995,9 +1019,11 @@ struct BufferUploadTicket {
 
 class BufferManager;
 
-class RecordedBufferUploads : NoCopy {
+class RecordedBufferUploads {
 public:
-    RecordedBufferUploads() = default;
+    RecordedBufferUploads(const RecordedBufferUploads&)            = delete;
+    RecordedBufferUploads& operator=(const RecordedBufferUploads&) = delete;
+    RecordedBufferUploads()                                        = default;
     ~RecordedBufferUploads();
 
     RecordedBufferUploads(RecordedBufferUploads&&) noexcept;
@@ -1017,9 +1043,11 @@ private:
     std::shared_ptr<State> m_state;
 };
 
-class BufferUploadBatchLease : NoCopy {
+class BufferUploadBatchLease {
 public:
-    BufferUploadBatchLease() = default;
+    BufferUploadBatchLease(const BufferUploadBatchLease&)            = delete;
+    BufferUploadBatchLease& operator=(const BufferUploadBatchLease&) = delete;
+    BufferUploadBatchLease()                                         = default;
     ~BufferUploadBatchLease();
 
     BufferUploadBatchLease(BufferUploadBatchLease&&) noexcept;
@@ -1035,8 +1063,12 @@ private:
     std::shared_ptr<RecordedBufferUploads::State> m_state;
 };
 
-class BufferManager : NoCopy, NoMove {
+class BufferManager {
 public:
+    BufferManager(const BufferManager&)            = delete;
+    BufferManager& operator=(const BufferManager&) = delete;
+    BufferManager(BufferManager&&)                 = delete;
+    BufferManager& operator=(BufferManager&&)      = delete;
     explicit BufferManager(const Device&);
     ~BufferManager();
 
@@ -1108,8 +1140,12 @@ struct DescriptorSetInfo {
     }
 };
 
-class GraphicsPipeline : NoCopy, NoMove {
+class GraphicsPipeline {
 public:
+    GraphicsPipeline(const GraphicsPipeline&)            = delete;
+    GraphicsPipeline& operator=(const GraphicsPipeline&) = delete;
+    GraphicsPipeline(GraphicsPipeline&&)                 = delete;
+    GraphicsPipeline& operator=(GraphicsPipeline&&)      = delete;
     GraphicsPipeline();
     ~GraphicsPipeline();
 
@@ -1151,11 +1187,11 @@ private:
     std::vector<VkVertexInputBindingDescription>   m_input_bind_descriptions;
     std::vector<VkVertexInputAttributeDescription> m_input_attr_descriptions;
 
-    VkPipelineViewportStateCreateInfo                m_view;
-    VkPipelineColorBlendStateCreateInfo              m_color;
-    std::vector<VkDynamicState>                      m_dynamic_states;
-    std::vector<VkPipelineColorBlendAttachmentState> m_color_attachments;
-    Map<VkShaderStageFlagBits, Uni_ShaderSpv>        m_stage_spv_map;
+    VkPipelineViewportStateCreateInfo                           m_view;
+    VkPipelineColorBlendStateCreateInfo                         m_color;
+    std::vector<VkDynamicState>                                 m_dynamic_states;
+    std::vector<VkPipelineColorBlendAttachmentState>            m_color_attachments;
+    std::map<VkShaderStageFlagBits, Uni_ShaderSpv, std::less<>> m_stage_spv_map;
 };
 
 // ---------- VertexInputState.hpp ----------
@@ -1169,7 +1205,9 @@ struct VertexInputState {
 
 // ---------- LocalExSwapchain.hpp ----------
 
-struct LocalExHandle : NoCopy {
+struct LocalExHandle {
+    LocalExHandle(const LocalExHandle&)               = delete;
+    LocalExHandle&    operator=(const LocalExHandle&) = delete;
     ExHandle          handle;
     ExImageParameters image;
 
@@ -1270,7 +1308,8 @@ public:
 
     bool ready() const override { return true; }
 
-    void setOnReadyChanged(std::function<void(const ::vrento::ExSwapchainReadyEvent&)> cb) override {
+    void
+    setOnReadyChanged(std::function<void(const ::vrento::ExSwapchainReadyEvent&)> cb) override {
         if (cb) {
             ::vrento::ExSwapchainReadyEvent e {
                 .ready  = true,
@@ -1289,7 +1328,7 @@ protected:
 
 private:
     ::vrento::FrameSurfaceCompletionResult CompleteRendered(::vrento::FrameSurfaceIdentity identity,
-                                                         int acquire_sync_fd) override {
+                                                            int acquire_sync_fd) override {
         if (! m_surface_pending) {
             if (acquire_sync_fd >= 0) ::close(acquire_sync_fd);
             return { .status   = ::vrento::FrameSurfaceCompletionStatus::NotPending,
@@ -1307,7 +1346,8 @@ private:
             if (old >= 0) ::close(old);
         }
         this->renderFrame();
-        return { .status = ::vrento::FrameSurfaceCompletionStatus::Submitted, .identity = identity };
+        return { .status   = ::vrento::FrameSurfaceCompletionStatus::Submitted,
+                 .identity = identity };
     }
 
     ::vrento::FrameSurfaceCompletionResult
@@ -1325,16 +1365,16 @@ private:
         return { .status = ::vrento::FrameSurfaceCompletionStatus::Aborted, .identity = identity };
     }
 
-    rstd::array<LocalExHandle, 3> m_handles;
+    rstd::array<LocalExHandle, 3>    m_handles;
     std::atomic<::vrento::ExHandle*> m_presented { nullptr };
     std::atomic<::vrento::ExHandle*> m_ready { nullptr };
     std::atomic<::vrento::ExHandle*> m_inprogress { nullptr };
-    VkExtent2D                    m_extent;
-    rstd::uint32_t                m_queue_family { VK_QUEUE_FAMILY_IGNORED };
-    std::atomic<int>              m_last_sync_fd { -1 };
-    u64                           m_next_acquire_serial { 1 };
+    VkExtent2D                       m_extent;
+    rstd::uint32_t                   m_queue_family { VK_QUEUE_FAMILY_IGNORED };
+    std::atomic<int>                 m_last_sync_fd { -1 };
+    u64                              m_next_acquire_serial { 1 };
     ::vrento::FrameSurfaceIdentity   m_pending_identity;
-    bool                          m_surface_pending { false };
+    bool                             m_surface_pending { false };
 };
 
 inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& device,
@@ -1365,7 +1405,8 @@ template<>
 struct Impl<Copy, vrento::vulkan::BufferUploadTicket> {};
 
 template<>
-struct Impl<vrento::vulkan::MemoryBudgetSource, vrento::vulkan::Device> : ImplBase<vrento::vulkan::Device> {
+struct Impl<vrento::vulkan::MemoryBudgetSource, vrento::vulkan::Device>
+    : ImplBase<vrento::vulkan::Device> {
     auto MemoryBudget() const -> vrento::vulkan::MemoryBudgetSnapshot {
         return this->self().MemoryBudget();
     }
@@ -1394,8 +1435,8 @@ struct Impl<vrento::vulkan::BufferBackend, vrento::vulkan::BufferManager>
 template<>
 struct Impl<vrento::vulkan::ImagePrepareBackend, vrento::vulkan::ImagePrepareContext>
     : ImplBase<vrento::vulkan::ImagePrepareContext> {
-    auto CreateImportedTexture(ref<vrento::Image>                            image,
-                               Option<sync::Arc<vrento::VideoPlaybackState>> playback)
+    auto CreateImportedTexture(ref<vrento::Image>                                  image,
+                               Option<sync::Arc<rstd::dyn<vrento::VideoPlayback>>> playback)
         -> Option<vrento::vulkan::PreparedImageAllocation> {
         return this->self().CreateImportedTexture(image, rstd::move(playback));
     }

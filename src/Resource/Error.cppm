@@ -24,14 +24,16 @@ export namespace rstd
 {
 
 template<>
-struct Impl<fmt::Display, vrento::resource::ResourceError> : ImplBase<vrento::resource::ResourceError> {
+struct Impl<fmt::Display, vrento::resource::ResourceError>
+    : ImplBase<vrento::resource::ResourceError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         return formatter.write_fmt(fmt::Arguments::make("{}", this->self().message));
     }
 };
 
 template<>
-struct Impl<fmt::Debug, vrento::resource::ResourceError> : ImplBase<vrento::resource::ResourceError> {
+struct Impl<fmt::Debug, vrento::resource::ResourceError>
+    : ImplBase<vrento::resource::ResourceError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         return formatter.write_fmt(fmt::Arguments::make("ResourceError(kind={}, message={})",
                                                         static_cast<int>(this->self().kind),

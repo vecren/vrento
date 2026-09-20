@@ -1,6 +1,7 @@
 export module vrento.resource:catalog;
 import rstd;
-import vrento.types;
+import vrento.image;
+import vrento.video_playback;
 import :error;
 import :texture;
 import :buffer;
@@ -32,6 +33,7 @@ struct TextureCatalog {
     using Funcs = TraitFuncs<&T::ResolveTexture, &T::FindTexture>;
 };
 
+// Called on decode workers; the loader owns the input snapshot and may outlive its provider.
 struct TextureLoader {
     using Trait                  = TextureLoader;
     static constexpr bool direct = false;
@@ -49,6 +51,7 @@ struct TextureLoader {
     using Funcs = TraitFuncs<&T::LoadTexture>;
 };
 
+// Called on the render thread. Identity resolution and loaders must describe the same revision.
 struct TextureContentProvider {
     using Trait                  = TextureContentProvider;
     static constexpr bool direct = false;
@@ -68,7 +71,7 @@ struct TextureContentProvider {
         }
 
         auto ResolveVideoPlayback(const TextureRequest& request) const
-            -> Option<rstd::sync::Arc<VideoPlaybackState>> {
+            -> Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> {
             return rstd::trait_call<2>(this, request);
         }
     };

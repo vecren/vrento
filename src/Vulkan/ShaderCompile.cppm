@@ -1,9 +1,8 @@
 module;
 
 export module vrento.shader_compile;
-import vrento.core;
 export import vvk;
-import vrento.types;
+export import vrento.shader_types;
 import rstd;
 import rstd.cppstd;
 
@@ -48,7 +47,7 @@ struct ShaderReflected {
         unsigned    set { 0 };
         unsigned    binding { 0 };
 
-        Map<std::string, BlockedUniform> member_map;
+        std::map<std::string, BlockedUniform, std::less<>> member_map;
     };
     std::vector<Block> blocks;
 
@@ -56,13 +55,13 @@ struct ShaderReflected {
         unsigned                     set { 0 };
         VkDescriptorSetLayoutBinding layout;
     };
-    Map<std::string, Binding> binding_map;
+    std::map<std::string, Binding, std::less<>> binding_map;
 
     struct Input {
         unsigned location;
         VkFormat format;
     };
-    Map<std::string, Input> input_location_map;
+    std::map<std::string, Input, std::less<>> input_location_map;
 };
 
 // ---------- ShaderComp.hpp ----------

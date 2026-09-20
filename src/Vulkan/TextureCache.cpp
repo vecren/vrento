@@ -12,13 +12,13 @@ module;
 #endif
 
 module vrento.vulkan;
-import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
-import vrento.types;
-import vrento.fs;
+import vrento.texture_types;
+import vrento.image;
+import vrento.video_playback;
 import wavsen.video;
 
 using namespace vrento;
@@ -363,22 +363,15 @@ CreateImage(const Device& device, VkExtent3D extent, rstd::uint32_t miplevel, Vk
 } // namespace
 
 usize TextureKey::HashValue(const TextureKey& k) {
-    std::size_t seed = 0;
-    utils::hash_combine(seed, k.width.to_primitive());
-    utils::hash_combine(seed, k.height.to_primitive());
-    utils::hash_combine(seed, (int)k.usage);
-    utils::hash_combine(seed, (int)k.format);
-    utils::hash_combine(seed, (int)k.mipmap_level);
-
-    utils::hash_combine(seed, (int)k.sample.wrapS);
-    utils::hash_combine(seed, (int)k.sample.wrapT);
-    utils::hash_combine(seed, (int)k.sample.magFilter);
-    utils::hash_combine(seed, (int)k.sample.minFilter);
-    utils::hash_combine(seed, k.sample.compare_enable);
-    utils::hash_combine(seed, (int)k.sample.compare_op);
-    utils::hash_combine(seed, (int)k.sample.border_color);
-    utils::hash_combine(seed, (int)k.samples);
-    return usize(seed);
+    rstd::hash::DefaultHasher state;
+    rstd::hash::hash_into(k.width, state);
+    rstd::hash::hash_into(k.height, state);
+    rstd::hash::hash_into(u32(k.usage), state);
+    rstd::hash::hash_into(u32(static_cast<rstd::uint32_t>(k.format)), state);
+    rstd::hash::hash_into(u32(k.mipmap_level), state);
+    rstd::hash::hash_into(k.sample, state);
+    rstd::hash::hash_into(u32(k.samples), state);
+    return rstd::as_cast<usize>(state.finish());
 }
 
 Option<ExImageParameters> TextureCache::CreateExTex(u32 width, u32 height, VkFormat format,
@@ -426,9 +419,9 @@ Option<ExImageParameters> TextureCache::CreateExTex(u32 width, u32 height, VkFor
 }
 
 Option<rstd::sync::Arc<TextureAllocation>>
-TextureCache::AllocateImportedTexture(const Image&                                image,
-                                      Option<rstd::sync::Arc<VideoPlaybackState>> playback) {
-    if (image.header.type == ImageType::VIDEO) {
+TextureCache::AllocateImportedTexture(const Image&                                      image,
+                                      Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback) {
+    if (image.header.kind == ImageKind::Video) {
         return CreateVideoTex(image, rstd::move(playback));
     }
 
@@ -557,7 +550,7 @@ Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(Texture
  * Video-tex pipeline
  *
  * When TexImageParser detects an MP4 / WebM container inlined in a
- * .tex body (header.type == ImageType::VIDEO), it doesn't decompress
+ * .tex body (header.kind == ImageKind::Video), it doesn't decompress
  * pixels. It stores a typed read range in ImageData instead. CreateTex
  * routes those Images here:
  *
@@ -785,16 +778,16 @@ struct TextureCache::VideoRegistry {
         Runtime& operator=(Runtime&&) noexcept = default;
         ~Runtime();
 
-        VideoRegistry*                              registry { nullptr };
-        TextureCache*                               owner { nullptr };
-        const Device*                               device { nullptr };
-        String                                      key;
-        rstd::uint32_t                              width { 0 };
-        rstd::uint32_t                              height { 0 };
-        ImageParameters                             target;
-        Option<rstd::sync::Arc<VideoPlaybackState>> playback;
-        Option<Box<wavsen::video::VideoDecoder>>    decoder;
-        wavsen::video::Nv12Frame                    nv12_scratch;
+        VideoRegistry*                                    registry { nullptr };
+        TextureCache*                                     owner { nullptr };
+        const Device*                                     device { nullptr };
+        String                                            key;
+        rstd::uint32_t                                    width { 0 };
+        rstd::uint32_t                                    height { 0 };
+        ImageParameters                                   target;
+        Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback;
+        Option<Box<wavsen::video::VideoDecoder>>          decoder;
+        wavsen::video::Nv12Frame                          nv12_scratch;
 #if __is_target_os(macos)
         struct AppleUploadSlot {
             vvk::CommandBuffers          command_storage;
@@ -1097,8 +1090,8 @@ struct Impl<vrento::vulkan::TextureAllocationRuntime,
 } // namespace rstd
 
 Option<rstd::sync::Arc<TextureAllocation>>
-TextureCache::CreateVideoTex(const Image&                                image,
-                             Option<rstd::sync::Arc<VideoPlaybackState>> playback) {
+TextureCache::CreateVideoTex(const Image&                                      image,
+                             Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback) {
     if (image.slots.empty() || image.slots[0].mipmaps.empty()) return rstd::None();
     auto& mip = image.slots[0].mipmaps[0];
     if (mip.video_source.is_none() || mip.width <= 0 || mip.height <= 0) {

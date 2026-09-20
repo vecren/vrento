@@ -6,7 +6,7 @@ export module vrento.resource_registry:resource_key;
 import rstd;
 import rstd.cppstd;
 import vrento.resource;
-import vrento.types;
+import vrento.shader_types;
 import vrento.vulkan;
 
 using namespace rstd::prelude;
@@ -289,7 +289,7 @@ inline void WriteCacheKey(PipelineKeyWriter& writer, const RenderPassCacheKey& k
 inline void WritePipelineShaderStages(PipelineKeyWriter&         writer,
                                       std::span<const ShaderSpv> stages) {
     struct StageRecord {
-        vrento::ShaderType                  stage;
+        vrento::ShaderType               stage;
         std::string_view                 entry_point;
         const std::vector<unsigned int>* spirv { nullptr };
     };
@@ -645,7 +645,8 @@ export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, vrento::vulkan::PipelineCacheKey> : ImplBase<vrento::vulkan::PipelineCacheKey> {
+struct Impl<hash::Hash, vrento::vulkan::PipelineCacheKey>
+    : ImplBase<vrento::vulkan::PipelineCacheKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {

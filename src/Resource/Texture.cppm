@@ -1,6 +1,6 @@
 export module vrento.resource:texture;
 import rstd;
-import vrento.types;
+import vrento.texture_types;
 import :handle;
 
 export namespace vrento::resource

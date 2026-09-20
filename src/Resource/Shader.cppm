@@ -1,6 +1,6 @@
 export module vrento.resource:shader;
 import rstd;
-import vrento.types;
+import vrento.shader_types;
 import :handle;
 
 export namespace vrento::resource
@@ -39,7 +39,8 @@ export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, vrento::resource::ShaderRequest> : ImplBase<vrento::resource::ShaderRequest> {
+struct Impl<hash::Hash, vrento::resource::ShaderRequest>
+    : ImplBase<vrento::resource::ShaderRequest> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {

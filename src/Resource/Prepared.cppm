@@ -3,6 +3,8 @@ import rstd;
 import rstd.cppstd;
 import vrento.resource;
 import vrento.vulkan;
+import vrento.image;
+import vrento.video_playback;
 
 import :texture_registry;
 import :buffer_registry;
@@ -521,9 +523,9 @@ private:
     };
 
     struct PendingContent {
-        String                                      key;
-        Option<rstd::sync::Arc<VideoPlaybackState>> playback;
-        Vec<PendingUse>                             uses;
+        String                                            key;
+        Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback;
+        Vec<PendingUse>                                   uses;
     };
 
     struct DecodedContent {
@@ -849,7 +851,7 @@ public:
                 auto                image = rstd::move(item.image).unwrap_unchecked();
                 auto playback = session.m_pending[item.index].playback.is_some()
                                     ? Some(session.m_pending[item.index].playback->clone())
-                                    : None<rstd::sync::Arc<VideoPlaybackState>>();
+                                    : None<rstd::sync::Arc<rstd::dyn<VideoPlayback>>>();
                 auto created  = (*m_textures_backend)
                                     ->CreateImportedTexture(image.deref(), rstd::move(playback));
                 if (created.is_none()) {

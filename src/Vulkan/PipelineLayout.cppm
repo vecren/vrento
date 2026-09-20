@@ -1,13 +1,17 @@
-export module vrento.vulkan_render:pipeline_layout;
+export module vrento.pipeline_layout;
 import rstd;
 import vrento.resource_registry;
-import vrento.vulkan;
+export import vrento.vulkan;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
 export namespace vrento::vulkan
 {
+
+struct PipelineLayoutPolicy {
+    Option<u32> shared_set;
+};
 
 struct PipelineLayoutBindingRequirement {
     u32         binding {};
@@ -162,10 +166,10 @@ inline auto MergeGlobalSet(Vec<VkDescriptorSetLayoutBinding>&  target,
                            Vec<GlobalBindingIdentity>&         identities,
                            const PipelineLayoutSetRequirement& set)
     -> Result<empty, resource::ResourceError> {
-    if (set.push_descriptor) return Error("descriptor set 0 cannot use push descriptors"_str);
+    if (set.push_descriptor) return Error("shared descriptor set cannot use push descriptors"_str);
     for (const auto& binding : set.bindings) {
         if (binding.shared_identity.is_none()) {
-            return Error("descriptor set 0 requires shared resource identity"_str);
+            return Error("shared descriptor set requires resource identity"_str);
         }
         for (const auto& existing : identities) {
             if (existing.binding != binding.binding) continue;
@@ -191,18 +195,18 @@ inline auto MergeGlobalSet(Vec<VkDescriptorSetLayoutBinding>&  target,
 
 inline auto MergeLocalRequirement(resource_registry::PipelineLayoutRequest& family,
                                   const PipelineLayoutRequirement&          requirement,
-                                  bool push_descriptor_supported)
+                                  bool                        push_descriptor_supported,
+                                  const PipelineLayoutPolicy& policy)
     -> Result<empty, resource::ResourceError> {
     auto candidate = family.clone();
     u32  push_set { u32::MAX };
-    for (u32 set_index { u32(1) }; set_index < as_cast<u32>(candidate.descriptor_sets.len());
-         ++set_index) {
+    for (u32 set_index {}; set_index < as_cast<u32>(candidate.descriptor_sets.len()); ++set_index) {
         if (candidate.descriptor_sets[as_cast<usize>(set_index)].push_descriptor) {
             push_set = set_index;
         }
     }
     for (const auto& set : requirement.descriptor_sets) {
-        if (set.set == u32()) continue;
+        if (policy.shared_set.is_some() && set.set == *policy.shared_set) continue;
         if (set.set == u32::MAX) return Error("invalid descriptor set index"_str);
         const auto required_size = rstd::as_cast<usize>(set.set) + usize(1);
         while (candidate.descriptor_sets.len() < required_size) {
@@ -221,7 +225,7 @@ inline auto MergeLocalRequirement(resource_registry::PipelineLayoutRequest& fami
         if (push) push_set = set.set;
         for (const auto& binding : set.bindings) {
             if (binding.shared_identity.is_some()) {
-                return Error("shared resources must use descriptor set 0"_str);
+                return Error("shared resources must use the configured shared set"_str);
             }
             auto merged = MergeBinding(target.bindings, binding);
             if (merged.is_err()) return merged;
@@ -347,12 +351,20 @@ inline auto ValidateDescriptorLimits(const resource_registry::PipelineLayoutRequ
 } // namespace pipeline_layout_detail
 
 inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
-                                bool push_descriptor_supported, u32 max_push_descriptors = u32::MAX,
+                                const PipelineLayoutPolicy& policy, bool push_descriptor_supported,
+                                u32                           max_push_descriptors   = u32::MAX,
                                 u32                           max_push_constant_size = u32::MAX,
                                 const VkPhysicalDeviceLimits* descriptor_limits      = nullptr)
     -> Result<PipelineLayoutPlan, resource::ResourceError> {
     using namespace pipeline_layout_detail;
 
+    if (policy.shared_set == Some(u32::MAX) ||
+        (policy.shared_set.is_some() && descriptor_limits != nullptr &&
+         policy.shared_set->to_primitive() >= descriptor_limits->maxBoundDescriptorSets))
+        return Err(resource::ResourceError {
+            .kind    = resource::ResourceErrorKind::MissingDefinition,
+            .message = String::make("invalid shared descriptor set index"_str),
+        });
     Vec<VkDescriptorSetLayoutBinding> global_bindings;
     Vec<GlobalBindingIdentity>        global_identities;
     Vec<VkPushConstantRange>          canonical_push_constants;
@@ -364,7 +376,7 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
             });
         }
         for (const auto& set : requirement.descriptor_sets) {
-            if (set.set != u32()) continue;
+            if (policy.shared_set.is_none() || set.set != *policy.shared_set) continue;
             auto merged = MergeGlobalSet(global_bindings, global_identities, set);
             if (merged.is_err()) return Err(rstd::move(merged).unwrap_err_unchecked());
         }
@@ -389,10 +401,12 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
                                    [](const auto& lhs, const auto& rhs) {
                                        return lhs.binding < rhs.binding;
                                    });
-    base.descriptor_sets.push(DescriptorSetInfo {
-        .push_descriptor = false,
-        .bindings        = rstd::move(global_bindings),
-    });
+    if (policy.shared_set.is_some()) {
+        while (base.descriptor_sets.len() <= as_cast<usize>(*policy.shared_set))
+            base.descriptor_sets.push(DescriptorSetInfo {});
+        base.descriptor_sets[as_cast<usize>(*policy.shared_set)].bindings =
+            rstd::move(global_bindings);
+    }
     base.push_constants = rstd::move(canonical_push_constants);
 
     PipelineLayoutPlan plan {
@@ -405,7 +419,8 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
         resource_registry::PipelineLayoutRequest best_request;
         for (usize family_index {}; family_index < plan.families.len(); ++family_index) {
             auto candidate = plan.families[family_index].request.clone();
-            auto merged = MergeLocalRequirement(candidate, requirement, push_descriptor_supported);
+            auto merged =
+                MergeLocalRequirement(candidate, requirement, push_descriptor_supported, policy);
             if (merged.is_ok() && descriptor_limits != nullptr) {
                 merged = ValidateDescriptorLimits(candidate, *descriptor_limits);
             }
@@ -440,7 +455,8 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
         }
 
         auto request = base.clone();
-        auto merged  = MergeLocalRequirement(request, requirement, push_descriptor_supported);
+        auto merged =
+            MergeLocalRequirement(request, requirement, push_descriptor_supported, policy);
         if (merged.is_ok() && descriptor_limits != nullptr) {
             merged = ValidateDescriptorLimits(request, *descriptor_limits);
         }
