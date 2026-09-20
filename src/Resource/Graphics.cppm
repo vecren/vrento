@@ -1,18 +1,18 @@
-export module wescene.resource_registry:graphics;
+export module vrento.resource_registry:graphics;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :descriptor;
 import :resource_key;
 
 using namespace rstd::prelude;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 struct PipelineLayoutRequest {
     Vec<DescriptorSetInfo>   descriptor_sets;
@@ -44,17 +44,17 @@ struct PipelinePushConstantSchema {
                            const PipelinePushConstantSchema&) = default;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::resource_registry::PipelinePushConstantSchema> {};
+struct Impl<Copy, vrento::resource_registry::PipelinePushConstantSchema> {};
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 struct PipelineLayoutSchema {
@@ -84,14 +84,14 @@ struct PipelineLayoutResult {
     rstd::sync::Arc<PipelineLayoutResourceEntry> physical;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::resource_registry::PipelineLayoutSchema>
-    : ImplBase<owe::resource_registry::PipelineLayoutSchema> {
+struct Impl<hash::Hash, vrento::resource_registry::PipelineLayoutSchema>
+    : ImplBase<vrento::resource_registry::PipelineLayoutSchema> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -109,10 +109,10 @@ struct Impl<hash::Hash, owe::resource_registry::PipelineLayoutSchema>
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 class PipelineLayoutRegistry {
 public:
@@ -867,4 +867,4 @@ private:
     mut_ref<RenderPassResourceCache>      m_render_pass_cache;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

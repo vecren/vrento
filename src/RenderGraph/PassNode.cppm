@@ -1,4 +1,4 @@
-export module wescene.rgraph:pass_node;
+export module vrento.rgraph:pass_node;
 import rstd;
 
 import :dependency_graph;
@@ -7,7 +7,7 @@ import :pass;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 struct PassNode {
@@ -27,4 +27,4 @@ struct PassNode {
     auto ToGraphviz() const -> String;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg

@@ -1,16 +1,16 @@
 module;
 
-module wescene.vulkan_render;
-import wescene.core;
-import wescene.types;
+module vrento.vulkan_render;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 using namespace rstd::prelude;
 
-namespace owe::vulkan
+namespace vrento::vulkan
 {
 
 namespace
@@ -330,4 +330,4 @@ auto ShaderReflectionFromArtifact(const resource::ShaderArtifact& artifact) -> S
     return reflected;
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

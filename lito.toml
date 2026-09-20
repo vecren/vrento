@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [lib]
 name = "vrento"
-module = "wescene.vulkan"
+module = "vrento.vulkan"
 archive = "vrento"
 
 [usage]

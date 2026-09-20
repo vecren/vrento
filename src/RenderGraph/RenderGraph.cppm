@@ -1,7 +1,7 @@
-export module wescene.rgraph:render_graph;
+export module vrento.rgraph:render_graph;
 import rstd;
 import cppstd;
-import wescene.resource;
+import vrento.resource;
 
 import :dependency_graph;
 import :pass;
@@ -10,7 +10,7 @@ import :tex_node;
 
 using namespace rstd::prelude;
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 class RenderGraph;
@@ -151,4 +151,4 @@ private:
     TextureKeyMap   m_key_texnode;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg

@@ -3,12 +3,12 @@ module;
 #include <cstdint>
 #include <span>
 
-export module wescene.resource_registry:buffer_registry;
+export module vrento.resource_registry:buffer_registry;
 import rstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -255,4 +255,4 @@ private:
     rstd::collections::HashMap<u64, PendingBufferUpload>       m_pending_uploads;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

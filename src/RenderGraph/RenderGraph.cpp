@@ -2,14 +2,14 @@ module;
 
 #include <rstd/macro.hpp>
 
-module wescene.rgraph;
+module vrento.rgraph;
 import rstd;
 import cppstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
-using namespace owe::rg;
-namespace resource = owe::resource;
+using namespace vrento::rg;
+namespace resource = vrento::resource;
 
 namespace
 {

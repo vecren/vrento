@@ -2,23 +2,23 @@ module;
 
 #include <rstd/macro.hpp>
 
-export module wescene.vulkan_render:resource;
-import wescene.core;
+export module vrento.vulkan_render:resource;
+import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wescene.types;
-export import wescene.resource;
-export import wescene.resource_registry;
-import wescene.vulkan;
-import wescene.scene;
-import wescene.load_bench;
+import vrento.types;
+export import vrento.resource;
+export import vrento.resource_registry;
+import vrento.vulkan;
+import vrento.scene;
+import vrento.load_bench;
 
 using namespace rstd::prelude;
 using rstd::collections::HashMap;
 using rstd::sync::Arc;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 class ShaderReflectionCache;
@@ -164,44 +164,44 @@ inline unsigned TextureSampleCountValue(VkSampleCountFlagBits sample_count) {
     return static_cast<unsigned>(sample_count);
 }
 
-inline TextureDefinition RenderTargetTextureDefinition(owe::SceneRenderTarget rt) {
-    const bool depth_sampled = rt.kind == owe::SceneRenderTargetKind::DepthSampled;
+inline TextureDefinition RenderTargetTextureDefinition(vrento::SceneRenderTarget rt) {
+    const bool depth_sampled = rt.kind == vrento::SceneRenderTargetKind::DepthSampled;
     return TextureDefinition {
         .width      = rt.PhysicalWidth(),
         .height     = rt.PhysicalHeight(),
         .usage      = depth_sampled ? TextureUsage::DepthAttachment | TextureUsage::Sampled
                                     : TextureUsage::Color,
-        .format     = depth_sampled ? owe::TextureFormat::D32F : owe::TextureFormat::RGBA8,
+        .format     = depth_sampled ? vrento::TextureFormat::D32F : vrento::TextureFormat::RGBA8,
         .sample     = rt.sample,
         .mip_levels = u32(rt.mipmap_level),
     };
 }
 
-inline TextureDefinition RenderTargetTextureDefinitionNoMip(owe::SceneRenderTarget rt) {
-    const bool depth_sampled = rt.kind == owe::SceneRenderTargetKind::DepthSampled;
+inline TextureDefinition RenderTargetTextureDefinitionNoMip(vrento::SceneRenderTarget rt) {
+    const bool depth_sampled = rt.kind == vrento::SceneRenderTargetKind::DepthSampled;
     return TextureDefinition {
         .width  = rt.PhysicalWidth(),
         .height = rt.PhysicalHeight(),
         .usage  = depth_sampled ? TextureUsage::DepthAttachment | TextureUsage::Sampled
                                 : TextureUsage::Color,
-        .format = depth_sampled ? owe::TextureFormat::D32F : owe::TextureFormat::RGBA8,
+        .format = depth_sampled ? vrento::TextureFormat::D32F : vrento::TextureFormat::RGBA8,
         .sample = rt.sample,
     };
 }
 
-inline TextureDefinition MsaaTextureDefinition(owe::SceneRenderTarget rt,
+inline TextureDefinition MsaaTextureDefinition(vrento::SceneRenderTarget rt,
                                                VkSampleCountFlagBits  samples) {
     auto definition    = RenderTargetTextureDefinition(rt);
     definition.samples = u32(TextureSampleCountValue(samples));
     return definition;
 }
 
-inline TextureDefinition DepthTextureDefinition(owe::SceneRenderTarget rt) {
+inline TextureDefinition DepthTextureDefinition(vrento::SceneRenderTarget rt) {
     return TextureDefinition {
         .width      = rt.PhysicalWidth(),
         .height     = rt.PhysicalHeight(),
         .usage      = TextureUsage::Depth,
-        .format     = owe::TextureFormat::D32F,
+        .format     = vrento::TextureFormat::D32F,
         .sample     = rt.sample,
         .mip_levels = u32(1),
         .samples    = u32(rt.sample_count),
@@ -442,64 +442,64 @@ struct RenderingResources {
     resource_registry::RenderResourceSystem            resources;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
 
 export namespace rstd
 {
 
 template<>
-struct Impl<owe::resource::TextureCatalog, owe::RenderSceneSnapshot>
-    : ImplBase<owe::RenderSceneSnapshot> {
-    auto ResolveTexture(owe::resource::TextureDefinitionId id) const
-        -> Option<owe::resource::TextureRequest> {
+struct Impl<vrento::resource::TextureCatalog, vrento::RenderSceneSnapshot>
+    : ImplBase<vrento::RenderSceneSnapshot> {
+    auto ResolveTexture(vrento::resource::TextureDefinitionId id) const
+        -> Option<vrento::resource::TextureRequest> {
         auto record = this->self().textureDesc(
-            owe::RenderTextureDescId { .index = id.index, .generation = id.generation });
+            vrento::RenderTextureDescId { .index = id.index, .generation = id.generation });
         if (record == nullptr) return None();
         auto name = record->desc.url.empty() ? rstd::cppstd::as_string_view(record->key.as_str())
                                              : std::string_view(record->desc.url);
-        return Some(owe::vulkan::MakeImportedTextureRequest(
+        return Some(vrento::vulkan::MakeImportedTextureRequest(
             name,
-            Some(owe::RenderTextureDescId { .index = id.index, .generation = id.generation })));
+            Some(vrento::RenderTextureDescId { .index = id.index, .generation = id.generation })));
     }
 
-    auto FindTexture(ref<str> name) const -> Option<owe::resource::TextureRequest> {
+    auto FindTexture(ref<str> name) const -> Option<vrento::resource::TextureRequest> {
         auto id = this->self().textureDescId(name);
         if (id.is_none()) return None();
-        return ResolveTexture(owe::resource::TextureDefinitionId { .index      = id->index,
+        return ResolveTexture(vrento::resource::TextureDefinitionId { .index      = id->index,
                                                                    .generation = id->generation });
     }
 };
 
 template<>
-struct Impl<owe::resource::TextureLoader, owe::vulkan::SnapshotImportedTextureLoader>
-    : ImplBase<owe::vulkan::SnapshotImportedTextureLoader> {
-    auto LoadTexture(ref<str> key) const -> Result<Arc<owe::Image>, owe::resource::ResourceError> {
+struct Impl<vrento::resource::TextureLoader, vrento::vulkan::SnapshotImportedTextureLoader>
+    : ImplBase<vrento::vulkan::SnapshotImportedTextureLoader> {
+    auto LoadTexture(ref<str> key) const -> Result<Arc<vrento::Image>, vrento::resource::ResourceError> {
         return this->self().LoadTexture(key);
     }
 };
 
 template<>
-struct Impl<owe::resource::TextureContentProvider, owe::vulkan::SnapshotImportedTextureProvider>
-    : ImplBase<owe::vulkan::SnapshotImportedTextureProvider> {
-    auto ResolveTextureContent(const owe::resource::TextureRequest& request) const
-        -> Result<owe::resource::ImportedTextureContentIdentity, owe::resource::ResourceError> {
+struct Impl<vrento::resource::TextureContentProvider, vrento::vulkan::SnapshotImportedTextureProvider>
+    : ImplBase<vrento::vulkan::SnapshotImportedTextureProvider> {
+    auto ResolveTextureContent(const vrento::resource::TextureRequest& request) const
+        -> Result<vrento::resource::ImportedTextureContentIdentity, vrento::resource::ResourceError> {
         return this->self().ResolveTextureContent(request);
     }
 
     auto OpenTextureLoader() const
-        -> Result<Arc<dyn<owe::resource::TextureLoader>>, owe::resource::ResourceError> {
+        -> Result<Arc<dyn<vrento::resource::TextureLoader>>, vrento::resource::ResourceError> {
         return this->self().OpenTextureLoader();
     }
 
-    auto ResolveVideoPlayback(const owe::resource::TextureRequest& request) const
-        -> Option<Arc<owe::VideoPlaybackState>> {
+    auto ResolveVideoPlayback(const vrento::resource::TextureRequest& request) const
+        -> Option<Arc<vrento::VideoPlaybackState>> {
         return this->self().ResolveVideoPlayback(request);
     }
 };
 
 template<>
-struct Impl<owe::resource::TexturePrepareObserver, owe::vulkan::SnapshotTexturePrepareObserver>
-    : ImplBase<owe::vulkan::SnapshotTexturePrepareObserver> {
+struct Impl<vrento::resource::TexturePrepareObserver, vrento::vulkan::SnapshotTexturePrepareObserver>
+    : ImplBase<vrento::vulkan::SnapshotTexturePrepareObserver> {
     void BeginTexturePlan() { this->self().BeginTexturePlan(); }
     void EndTexturePlan() { this->self().EndTexturePlan(); }
     void BeginTextureDecode() { this->self().BeginTextureDecode(); }

@@ -6,29 +6,29 @@ module;
 // Macros only — VVK_CHECK family.
 #include "vvk/macros.hpp"
 
-export module wescene.vulkan;
-import wescene.core;
+export module vrento.vulkan;
+import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wescene.types;
+import vrento.types;
 
 // Vulkan FFI: vvk::ffi::vulkan exposes the full Vk symbol surface as
 // a comprehensive FFI module. Re-exported so downstream consumers
-// (wescene.vulkan_render etc.) that `import wescene.vulkan;` still see
+// (vrento.vulkan_render etc.) that `import vrento.vulkan;` still see
 // every Vk type / enumerator / PFN_* without needing their own
 // `import vulkan;`.
 export import vvk;
 
 // Re-export the host-only shader compile API. Lets existing consumers
-// (VulkanRender/* etc.) keep their `import wescene.vulkan;` without
+// (VulkanRender/* etc.) keep their `import vrento.vulkan;` without
 // caring that ShaderSpv / ShaderReflected / Preprocess / etc. now live
 // in a separate module.
-export import wescene.shader_compile;
+export import vrento.shader_compile;
 
 using namespace rstd::prelude;
 
-export namespace owe
+export namespace vrento
 {
 
 // ---------- ExSwapchain (formerly Swapchain/ExSwapchain.hpp) ----------
@@ -436,7 +436,7 @@ private:
     Set<std::string>         m_layers;
 };
 
-// ShaderSpv / Uni_ShaderSpv now live in wescene.shader_compile (re-exported above).
+// ShaderSpv / Uni_ShaderSpv now live in vrento.shader_compile (re-exported above).
 
 // ---------- Parameters.hpp ----------
 
@@ -669,7 +669,7 @@ private:
 
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep wavsen.video out of the public
-     * wescene.vulkan module interface. */
+     * vrento.vulkan module interface. */
     Option<Box<VideoRegistry>> m_video_registry;
 };
 
@@ -1188,8 +1188,8 @@ struct LocalExHandle : NoCopy {
 // global-attached base — clang refuses the implicit `this` conversion at
 // the qualified-call site. Public inheritance is semantically equivalent
 // here (callers never reach for the base interface directly).
-class LocalExSwapchain final : public ::owe::ExSwapchain,
-                               public ::owe::TripleSwapchain<::owe::ExHandle> {
+class LocalExSwapchain final : public ::vrento::ExSwapchain,
+                               public ::vrento::TripleSwapchain<::vrento::ExHandle> {
 public:
     LocalExSwapchain(rstd::array<LocalExHandle, 3> handles, VkExtent2D ext,
                      rstd::uint32_t queue_family)
@@ -1197,7 +1197,7 @@ public:
         int index = 0;
         for (auto& h : m_handles) {
             auto& handle         = h.handle;
-            handle               = ::owe::ExHandle(index++);
+            handle               = ::vrento::ExHandle(index++);
             handle.width         = (i32)h.image.extent.width;
             handle.height        = (i32)h.image.extent.height;
             handle.fd            = h.image.fd;
@@ -1217,38 +1217,38 @@ public:
         if (fd >= 0) ::close(fd);
     }
 
-    ::owe::FrameSurfaceAcquireResult acquireRenderTarget() override {
+    ::vrento::FrameSurfaceAcquireResult acquireRenderTarget() override {
         if (m_surface_pending) {
-            return { .status = ::owe::FrameSurfaceAcquireStatus::Busy };
+            return { .status = ::vrento::FrameSurfaceAcquireStatus::Busy };
         }
         const u32 slot_index     = rstd::as_cast<u32>(this->getInprogress()->id());
         const u64 acquire_serial = m_next_acquire_serial++;
         if (acquire_serial == u64()) {
-            return { .status     = ::owe::FrameSurfaceAcquireStatus::ProtocolError,
+            return { .status     = ::vrento::FrameSurfaceAcquireStatus::ProtocolError,
                      .error_code = i32(-EOVERFLOW) };
         }
-        ::owe::FrameSurfaceLease lease {
+        ::vrento::FrameSurfaceLease lease {
             .identity = { .owner_generation = u64(1),
                           .image_index      = slot_index,
                           .acquire_serial   = acquire_serial },
-            .reuse    = { .kind = ::owe::FrameSurfaceReuseKind::QueueOrdered },
+            .reuse    = { .kind = ::vrento::FrameSurfaceReuseKind::QueueOrdered },
             .image    = ToImageParameters(m_handles.at(rstd::as_cast<usize>(slot_index)).image),
             .format   = VK_FORMAT_R8G8B8A8_UNORM,
             .initial_layout       = VK_IMAGE_LAYOUT_GENERAL,
             .initial_queue_family = m_queue_family,
-            .acquire              = { .kind = ::owe::FrameSurfaceAcquireKind::QueueOrdered },
+            .acquire              = { .kind = ::vrento::FrameSurfaceAcquireKind::QueueOrdered },
             .final_layout         = VK_IMAGE_LAYOUT_GENERAL,
             .final_queue_family   = m_queue_family,
             .discard_content      = true,
         };
         if (! lease.valid()) {
-            return { .status     = ::owe::FrameSurfaceAcquireStatus::ProtocolError,
+            return { .status     = ::vrento::FrameSurfaceAcquireStatus::ProtocolError,
                      .error_code = i32(-EINVAL) };
         }
         m_surface_pending  = true;
         m_pending_identity = lease.identity;
         auto completion    = MakeCompletionCapability(lease.identity);
-        return { .status     = ::owe::FrameSurfaceAcquireStatus::Acquired,
+        return { .status     = ::vrento::FrameSurfaceAcquireStatus::Acquired,
                  .lease      = std::move(lease),
                  .completion = std::move(completion) };
     }
@@ -1257,11 +1257,11 @@ public:
         return m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
     }
 
-    ::owe::ExHandle* eatFrame() override {
-        return this->TripleSwapchain<::owe::ExHandle>::eatFrame();
+    ::vrento::ExHandle* eatFrame() override {
+        return this->TripleSwapchain<::vrento::ExHandle>::eatFrame();
     }
-    rstd::array<::owe::ExHandle*, 3> snapshot_all_slots() override {
-        return this->TripleSwapchain<::owe::ExHandle>::snapshot_all_slots();
+    rstd::array<::vrento::ExHandle*, 3> snapshot_all_slots() override {
+        return this->TripleSwapchain<::vrento::ExHandle>::snapshot_all_slots();
     }
 
     unsigned width() const override { return m_extent.width; }
@@ -1270,9 +1270,9 @@ public:
 
     bool ready() const override { return true; }
 
-    void setOnReadyChanged(std::function<void(const ::owe::ExSwapchainReadyEvent&)> cb) override {
+    void setOnReadyChanged(std::function<void(const ::vrento::ExSwapchainReadyEvent&)> cb) override {
         if (cb) {
-            ::owe::ExSwapchainReadyEvent e {
+            ::vrento::ExSwapchainReadyEvent e {
                 .ready  = true,
                 .width  = m_extent.width,
                 .height = m_extent.height,
@@ -1283,21 +1283,21 @@ public:
     }
 
 protected:
-    std::atomic<::owe::ExHandle*>& presented() override { return m_presented; }
-    std::atomic<::owe::ExHandle*>& ready() override { return m_ready; }
-    std::atomic<::owe::ExHandle*>& inprogress() override { return m_inprogress; }
+    std::atomic<::vrento::ExHandle*>& presented() override { return m_presented; }
+    std::atomic<::vrento::ExHandle*>& ready() override { return m_ready; }
+    std::atomic<::vrento::ExHandle*>& inprogress() override { return m_inprogress; }
 
 private:
-    ::owe::FrameSurfaceCompletionResult CompleteRendered(::owe::FrameSurfaceIdentity identity,
+    ::vrento::FrameSurfaceCompletionResult CompleteRendered(::vrento::FrameSurfaceIdentity identity,
                                                          int acquire_sync_fd) override {
         if (! m_surface_pending) {
             if (acquire_sync_fd >= 0) ::close(acquire_sync_fd);
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::NotPending,
+            return { .status   = ::vrento::FrameSurfaceCompletionStatus::NotPending,
                      .identity = identity };
         }
         if (identity != m_pending_identity) {
             if (acquire_sync_fd >= 0) ::close(acquire_sync_fd);
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::StaleIdentity,
+            return { .status   = ::vrento::FrameSurfaceCompletionStatus::StaleIdentity,
                      .identity = identity };
         }
         m_surface_pending  = false;
@@ -1307,33 +1307,33 @@ private:
             if (old >= 0) ::close(old);
         }
         this->renderFrame();
-        return { .status = ::owe::FrameSurfaceCompletionStatus::Submitted, .identity = identity };
+        return { .status = ::vrento::FrameSurfaceCompletionStatus::Submitted, .identity = identity };
     }
 
-    ::owe::FrameSurfaceCompletionResult
-    AbortRenderTarget(::owe::FrameSurfaceIdentity identity) override {
+    ::vrento::FrameSurfaceCompletionResult
+    AbortRenderTarget(::vrento::FrameSurfaceIdentity identity) override {
         if (! m_surface_pending) {
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::NotPending,
+            return { .status   = ::vrento::FrameSurfaceCompletionStatus::NotPending,
                      .identity = identity };
         }
         if (identity != m_pending_identity) {
-            return { .status   = ::owe::FrameSurfaceCompletionStatus::StaleIdentity,
+            return { .status   = ::vrento::FrameSurfaceCompletionStatus::StaleIdentity,
                      .identity = identity };
         }
         m_surface_pending  = false;
         m_pending_identity = {};
-        return { .status = ::owe::FrameSurfaceCompletionStatus::Aborted, .identity = identity };
+        return { .status = ::vrento::FrameSurfaceCompletionStatus::Aborted, .identity = identity };
     }
 
     rstd::array<LocalExHandle, 3> m_handles;
-    std::atomic<::owe::ExHandle*> m_presented { nullptr };
-    std::atomic<::owe::ExHandle*> m_ready { nullptr };
-    std::atomic<::owe::ExHandle*> m_inprogress { nullptr };
+    std::atomic<::vrento::ExHandle*> m_presented { nullptr };
+    std::atomic<::vrento::ExHandle*> m_ready { nullptr };
+    std::atomic<::vrento::ExHandle*> m_inprogress { nullptr };
     VkExtent2D                    m_extent;
     rstd::uint32_t                m_queue_family { VK_QUEUE_FAMILY_IGNORED };
     std::atomic<int>              m_last_sync_fd { -1 };
     u64                           m_next_acquire_serial { 1 };
-    ::owe::FrameSurfaceIdentity   m_pending_identity;
+    ::vrento::FrameSurfaceIdentity   m_pending_identity;
     bool                          m_surface_pending { false };
 };
 
@@ -1353,35 +1353,35 @@ inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& de
 }
 
 } // namespace vulkan
-} // namespace owe
+} // namespace vrento
 
 export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::vulkan::ImageUploadTicket> {};
+struct Impl<Copy, vrento::vulkan::ImageUploadTicket> {};
 
 template<>
-struct Impl<Copy, owe::vulkan::BufferUploadTicket> {};
+struct Impl<Copy, vrento::vulkan::BufferUploadTicket> {};
 
 template<>
-struct Impl<owe::vulkan::MemoryBudgetSource, owe::vulkan::Device> : ImplBase<owe::vulkan::Device> {
-    auto MemoryBudget() const -> owe::vulkan::MemoryBudgetSnapshot {
+struct Impl<vrento::vulkan::MemoryBudgetSource, vrento::vulkan::Device> : ImplBase<vrento::vulkan::Device> {
+    auto MemoryBudget() const -> vrento::vulkan::MemoryBudgetSnapshot {
         return this->self().MemoryBudget();
     }
 };
 
 template<>
-struct Impl<owe::vulkan::BufferBackend, owe::vulkan::BufferManager>
-    : ImplBase<owe::vulkan::BufferManager> {
-    auto AllocateBuffer(const owe::vulkan::BufferAllocationRequest& request)
-        -> Option<owe::vulkan::BufferAllocation> {
+struct Impl<vrento::vulkan::BufferBackend, vrento::vulkan::BufferManager>
+    : ImplBase<vrento::vulkan::BufferManager> {
+    auto AllocateBuffer(const vrento::vulkan::BufferAllocationRequest& request)
+        -> Option<vrento::vulkan::BufferAllocation> {
         return this->self().Allocate(request);
     }
 
-    auto QueueBufferWrite(mut_ref<owe::vulkan::BufferAllocation> allocation, slice<u8> content,
+    auto QueueBufferWrite(mut_ref<vrento::vulkan::BufferAllocation> allocation, slice<u8> content,
                           VkDeviceSize destination_offset)
-        -> Option<owe::vulkan::BufferUploadTicket> {
+        -> Option<vrento::vulkan::BufferUploadTicket> {
         return this->self().QueueWrite(
             *allocation,
             std::span<const rstd::uint8_t>(
@@ -1392,21 +1392,21 @@ struct Impl<owe::vulkan::BufferBackend, owe::vulkan::BufferManager>
 };
 
 template<>
-struct Impl<owe::vulkan::ImagePrepareBackend, owe::vulkan::ImagePrepareContext>
-    : ImplBase<owe::vulkan::ImagePrepareContext> {
-    auto CreateImportedTexture(ref<owe::Image>                            image,
-                               Option<sync::Arc<owe::VideoPlaybackState>> playback)
-        -> Option<owe::vulkan::PreparedImageAllocation> {
+struct Impl<vrento::vulkan::ImagePrepareBackend, vrento::vulkan::ImagePrepareContext>
+    : ImplBase<vrento::vulkan::ImagePrepareContext> {
+    auto CreateImportedTexture(ref<vrento::Image>                            image,
+                               Option<sync::Arc<vrento::VideoPlaybackState>> playback)
+        -> Option<vrento::vulkan::PreparedImageAllocation> {
         return this->self().CreateImportedTexture(image, rstd::move(playback));
     }
 
-    auto AllocateTexture(owe::vulkan::TextureKey key)
-        -> Option<sync::Arc<owe::vulkan::TextureAllocation>> {
+    auto AllocateTexture(vrento::vulkan::TextureKey key)
+        -> Option<sync::Arc<vrento::vulkan::TextureAllocation>> {
         return this->self().AllocateTexture(rstd::move(key));
     }
 
-    auto AllocateTransparentTexture(owe::vulkan::TextureKey key)
-        -> Option<owe::vulkan::PreparedImageAllocation> {
+    auto AllocateTransparentTexture(vrento::vulkan::TextureKey key)
+        -> Option<vrento::vulkan::PreparedImageAllocation> {
         return this->self().AllocateTransparentTexture(rstd::move(key));
     }
 };

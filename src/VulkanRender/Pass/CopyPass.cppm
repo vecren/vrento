@@ -1,14 +1,14 @@
 module;
 
-export module wescene.vulkan_render:copy_pass;
+export module vrento.vulkan_render:copy_pass;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 import :vulkan_pass;
 import :resource;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 class CopyPass : public VulkanPass {
@@ -43,4 +43,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

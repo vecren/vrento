@@ -1,6 +1,6 @@
-export module wescene.resource_registry:owner;
+export module vrento.resource_registry:owner;
 import rstd;
-import wescene.vulkan;
+import vrento.vulkan;
 
 import :texture_registry;
 import :buffer_registry;
@@ -12,7 +12,7 @@ import :policy;
 import :external;
 import :graphics;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -123,4 +123,4 @@ private:
     FramebufferCacheDiagnostics             m_framebuffer_diagnostics;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

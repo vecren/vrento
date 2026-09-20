@@ -2,14 +2,14 @@ module;
 
 #include <span>
 
-export module wescene.resource_registry:texture_registry;
+export module vrento.resource_registry:texture_registry;
 import rstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 using namespace rstd::prelude;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 struct Texture {
@@ -72,14 +72,14 @@ struct TextureRegistryIdentity {
     }
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::resource::TextureRegistryIdentity>
-    : ImplBase<owe::resource::TextureRegistryIdentity> {
+struct Impl<hash::Hash, vrento::resource::TextureRegistryIdentity>
+    : ImplBase<vrento::resource::TextureRegistryIdentity> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -89,8 +89,8 @@ struct Impl<hash::Hash, owe::resource::TextureRegistryIdentity>
 };
 
 template<>
-struct Impl<hash::Hash, owe::resource::ImportedTextureContentIdentity>
-    : ImplBase<owe::resource::ImportedTextureContentIdentity> {
+struct Impl<hash::Hash, vrento::resource::ImportedTextureContentIdentity>
+    : ImplBase<vrento::resource::ImportedTextureContentIdentity> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -101,7 +101,7 @@ struct Impl<hash::Hash, owe::resource::ImportedTextureContentIdentity>
 
 } // namespace rstd
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 class TextureRegistry {
@@ -389,16 +389,16 @@ private:
     Option<Box<Snapshot>>                                                        m_transaction;
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource
 
 export namespace rstd
 {
 
 template<>
-struct Impl<owe::resource::TextureLogicalRegistryView, owe::resource::TextureRegistry>
-    : ImplBase<owe::resource::TextureRegistry> {
-    auto ResolveTextureState(owe::resource::TextureHandle handle) const
-        -> Option<owe::resource::TextureLogicalState> {
+struct Impl<vrento::resource::TextureLogicalRegistryView, vrento::resource::TextureRegistry>
+    : ImplBase<vrento::resource::TextureRegistry> {
+    auto ResolveTextureState(vrento::resource::TextureHandle handle) const
+        -> Option<vrento::resource::TextureLogicalState> {
         return this->self().ResolveTextureState(handle);
     }
 };

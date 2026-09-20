@@ -3,14 +3,14 @@ module;
 #include <rstd/macro.hpp>
 #include "vvk/macros.hpp"
 
-module wescene.vulkan;
-import wescene.types;
+module vrento.vulkan;
+import vrento.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
 using namespace rstd::prelude;
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 struct SwapChainSupportDetails {
     VkSurfaceCapabilitiesKHR           capabilities;

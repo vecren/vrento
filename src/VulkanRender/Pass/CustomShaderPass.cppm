@@ -1,11 +1,11 @@
 module;
 
-export module wescene.vulkan_render:custom_shader_pass;
-import wescene.core;
+export module vrento.vulkan_render:custom_shader_pass;
+import vrento.core;
 import rstd;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 import :vulkan_pass;
 import :resource;
@@ -14,7 +14,7 @@ import :uniform_buffer;
 
 using namespace rstd::prelude;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 class CustomShaderPass : public VulkanPass {
@@ -142,4 +142,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

@@ -5,20 +5,20 @@ module;
 
 #include "vvk/macros.hpp"
 
-module wescene.vulkan;
-import wescene.core;
-import wescene.types;
+module vrento.vulkan;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
 using namespace rstd::prelude;
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 namespace
 {
 
-void EnumateDeviceExts(const vvk::PhysicalDevice& gpu, owe::Set<std::string>& set) {
+void EnumateDeviceExts(const vvk::PhysicalDevice& gpu, vrento::Set<std::string>& set) {
     rstd::vec::Vec<VkExtensionProperties> properties;
     VVK_CHECK_VOID_RE(gpu.EnumerateDeviceExtensionProperties(properties));
     for (auto& ext : properties) set.insert(ext.extensionName);

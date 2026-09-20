@@ -1,8 +1,8 @@
-export module wescene.resource:buffer;
+export module vrento.resource:buffer;
 import rstd;
 import :handle;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -58,4 +58,4 @@ struct BufferRequest {
     }
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource

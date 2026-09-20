@@ -1,12 +1,12 @@
-export module wescene.resource:catalog;
+export module vrento.resource:catalog;
 import rstd;
-import wescene.types;
+import vrento.types;
 import :error;
 import :texture;
 import :buffer;
 import :shader;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -207,4 +207,4 @@ struct TextureLogicalRegistryView {
     using Funcs = TraitFuncs<&T::ResolveTextureState>;
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource

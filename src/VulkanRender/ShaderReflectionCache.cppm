@@ -1,15 +1,15 @@
 module;
 
-export module wescene.vulkan_render:shader_reflection_cache;
-import wescene.core;
-import wescene.types;
+export module vrento.vulkan_render:shader_reflection_cache;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.resource;
+import vrento.vulkan;
+import vrento.scene;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 struct ShaderReflectionKey {
@@ -19,14 +19,14 @@ struct ShaderReflectionKey {
     bool operator==(const ShaderReflectionKey&) const = default;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::vulkan::ShaderReflectionKey>
-    : ImplBase<owe::vulkan::ShaderReflectionKey> {
+struct Impl<hash::Hash, vrento::vulkan::ShaderReflectionKey>
+    : ImplBase<vrento::vulkan::ShaderReflectionKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -37,7 +37,7 @@ struct Impl<hash::Hash, owe::vulkan::ShaderReflectionKey>
 
 } // namespace rstd
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 struct CachedShaderStage {
@@ -83,4 +83,4 @@ private:
 std::vector<Uni_ShaderSpv> ShaderSpvsFromArtifact(const resource::ShaderArtifact&);
 auto ShaderReflectionFromArtifact(const resource::ShaderArtifact&) -> ShaderReflected;
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

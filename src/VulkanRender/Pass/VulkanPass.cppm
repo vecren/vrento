@@ -1,9 +1,9 @@
-export module wescene.vulkan_render:vulkan_pass;
+export module vrento.vulkan_render:vulkan_pass;
 import rstd;
 import rstd.cppstd;
-import wescene.rgraph;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.rgraph;
+import vrento.vulkan;
+import vrento.scene;
 
 import :resource;
 import :pipeline_layout;
@@ -12,7 +12,7 @@ import :uniform_buffer;
 
 using namespace rstd::prelude;
 
-export namespace owe
+export namespace vrento
 {
 
 namespace vulkan
@@ -346,4 +346,4 @@ private:
 };
 
 } // namespace vulkan
-} // namespace owe
+} // namespace vrento

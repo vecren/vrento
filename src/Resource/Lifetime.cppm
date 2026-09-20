@@ -1,11 +1,11 @@
-export module wescene.resource_registry:lifetime;
+export module vrento.resource_registry:lifetime;
 import rstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :prepared;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -132,4 +132,4 @@ private:
     rstd::collections::HashMap<u64, SubmissionLease> m_in_flight;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

@@ -3,14 +3,14 @@ module;
 #include <rstd/macro.hpp>
 #include "vvk/macros.hpp"
 
-module wescene.vulkan;
+module vrento.vulkan;
 
 import rstd.cppstd;
 import rstd.log;
 
 using namespace rstd::prelude;
 
-namespace owe::vulkan
+namespace vrento::vulkan
 {
 
 namespace
@@ -913,4 +913,4 @@ auto ImagePrepareContext::AllocateTransparentTexture(TextureKey key)
     });
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

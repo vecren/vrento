@@ -1,11 +1,11 @@
-export module wescene.resource_registry:external;
+export module vrento.resource_registry:external;
 import rstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :barrier;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -103,4 +103,4 @@ public:
     }
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

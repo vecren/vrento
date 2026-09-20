@@ -1,8 +1,8 @@
-export module wescene.resource_registry:shader_registry;
+export module vrento.resource_registry:shader_registry;
 import rstd;
-import wescene.resource;
+import vrento.resource;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -108,4 +108,4 @@ private:
     rstd::collections::HashMap<resource::ShaderRequest, resource::ShaderHandle> m_requests;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

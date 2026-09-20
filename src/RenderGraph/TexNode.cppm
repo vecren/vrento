@@ -1,12 +1,12 @@
-export module wescene.rgraph:tex_node;
+export module vrento.rgraph:tex_node;
 import rstd;
-import wescene.resource;
+import vrento.resource;
 import :dependency_graph;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 struct TexNode {
@@ -35,4 +35,4 @@ struct TexNode {
         -> String;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg

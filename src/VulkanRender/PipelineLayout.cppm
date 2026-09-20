@@ -1,12 +1,12 @@
-export module wescene.vulkan_render:pipeline_layout;
+export module vrento.vulkan_render:pipeline_layout;
 import rstd;
-import wescene.resource_registry;
-import wescene.vulkan;
+import vrento.resource_registry;
+import vrento.vulkan;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 struct PipelineLayoutBindingRequirement {
@@ -475,4 +475,4 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
     return Ok(rstd::move(plan));
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

@@ -1,9 +1,9 @@
-export module wescene.resource:shader;
+export module vrento.resource:shader;
 import rstd;
-import wescene.types;
+import vrento.types;
 import :handle;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -33,13 +33,13 @@ struct ShaderRequest {
     friend bool operator==(const ShaderRequest&, const ShaderRequest&) = default;
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::resource::ShaderRequest> : ImplBase<owe::resource::ShaderRequest> {
+struct Impl<hash::Hash, vrento::resource::ShaderRequest> : ImplBase<vrento::resource::ShaderRequest> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -52,7 +52,7 @@ struct Impl<hash::Hash, owe::resource::ShaderRequest> : ImplBase<owe::resource::
 
 } // namespace rstd
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 struct ShaderArtifactStage {
@@ -228,4 +228,4 @@ struct ShaderArtifact {
     }
 };
 
-} // namespace owe::resource
+} // namespace vrento::resource

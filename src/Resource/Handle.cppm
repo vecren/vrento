@@ -1,7 +1,7 @@
-export module wescene.resource:handle;
+export module vrento.resource:handle;
 import rstd;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -52,17 +52,17 @@ using DescriptorLayoutHandle  = ResourceHandle<DescriptorLayoutHandleTag>;
 using PipelineLayoutHandle    = ResourceHandle<PipelineLayoutHandleTag>;
 using DescriptorBindingHandle = ResourceHandle<DescriptorBindingHandleTag>;
 
-} // namespace owe::resource
+} // namespace vrento::resource
 
 export namespace rstd
 {
 
 template<typename Tag>
-struct Impl<Copy, owe::resource::ResourceHandle<Tag>> {};
+struct Impl<Copy, vrento::resource::ResourceHandle<Tag>> {};
 
 template<typename Tag>
-struct Impl<hash::Hash, owe::resource::ResourceHandle<Tag>>
-    : ImplBase<owe::resource::ResourceHandle<Tag>> {
+struct Impl<hash::Hash, vrento::resource::ResourceHandle<Tag>>
+    : ImplBase<vrento::resource::ResourceHandle<Tag>> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {

@@ -2,13 +2,13 @@ module;
 
 #include <algorithm>
 
-export module wescene.resource_registry:descriptor;
+export module vrento.resource_registry:descriptor;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -23,17 +23,17 @@ struct DescriptorBindingSchema {
                            const DescriptorBindingSchema&) = default;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::resource_registry::DescriptorBindingSchema> {};
+struct Impl<Copy, vrento::resource_registry::DescriptorBindingSchema> {};
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 struct DescriptorSetSchema {
@@ -59,14 +59,14 @@ struct DescriptorSetSchema {
     }
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::resource_registry::DescriptorSetSchema>
-    : ImplBase<owe::resource_registry::DescriptorSetSchema> {
+struct Impl<hash::Hash, vrento::resource_registry::DescriptorSetSchema>
+    : ImplBase<vrento::resource_registry::DescriptorSetSchema> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -84,7 +84,7 @@ struct Impl<hash::Hash, owe::resource_registry::DescriptorSetSchema>
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 struct DescriptorLayoutEntry {
@@ -234,20 +234,20 @@ struct DescriptorBufferBinding {
     VkDeviceSize   size { 0 };
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::resource_registry::DescriptorImageBinding> {};
+struct Impl<Copy, vrento::resource_registry::DescriptorImageBinding> {};
 
 template<>
-struct Impl<Copy, owe::resource_registry::DescriptorBufferBinding> {};
+struct Impl<Copy, vrento::resource_registry::DescriptorBufferBinding> {};
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 struct DescriptorSetPacketKey {
@@ -269,14 +269,14 @@ struct DescriptorSetPacketKey {
     }
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::resource_registry::DescriptorSetPacketKey>
-    : ImplBase<owe::resource_registry::DescriptorSetPacketKey> {
+struct Impl<hash::Hash, vrento::resource_registry::DescriptorSetPacketKey>
+    : ImplBase<vrento::resource_registry::DescriptorSetPacketKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -294,7 +294,7 @@ struct Impl<hash::Hash, owe::resource_registry::DescriptorSetPacketKey>
 
 } // namespace rstd
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 struct DescriptorBindingRecordState {
@@ -753,4 +753,4 @@ private:
     u64                                                                         m_next_index { 0 };
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

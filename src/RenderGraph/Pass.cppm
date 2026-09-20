@@ -1,9 +1,9 @@
-export module wescene.rgraph:pass;
+export module vrento.rgraph:pass;
 import rstd;
 
 using namespace rstd::prelude;
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 struct PassHandle {
@@ -29,13 +29,13 @@ struct VirtualPass : Pass {
     ~VirtualPass() noexcept override = default;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::rg::PassHandle> : ImplBase<owe::rg::PassHandle> {
+struct Impl<hash::Hash, vrento::rg::PassHandle> : ImplBase<vrento::rg::PassHandle> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {

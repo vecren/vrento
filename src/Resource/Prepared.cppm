@@ -1,8 +1,8 @@
-export module wescene.resource_registry:prepared;
+export module vrento.resource_registry:prepared;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :texture_registry;
 import :buffer_registry;
@@ -11,7 +11,7 @@ import :descriptor;
 import :graphics;
 import :external;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -785,7 +785,7 @@ public:
         const auto worker_count = rstd::min(usize(4), session.m_pending.len());
         auto       builder      = rstd::thread::ThreadPoolBuilder::make();
         builder.worker_count(worker_count);
-        builder.thread_name(String::make("owe-texture-decode"_str));
+        builder.thread_name(String::make("vrento-texture-decode"_str));
         auto pool = builder.build();
         if (pool.is_err()) {
             return Err(resource::ResourceError {
@@ -1111,4 +1111,4 @@ inline auto ResourcePlanPrepareVisitor::VisitShader(const resource::ShaderPlanEn
     return m_service.PrepareShader(entry, m_table, m_providers.shader);
 }
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

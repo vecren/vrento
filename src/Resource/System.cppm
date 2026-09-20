@@ -2,16 +2,16 @@ module;
 
 #include <span>
 
-export module wescene.resource_registry:system;
+export module vrento.resource_registry:system;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :owner;
 import :prepared;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -614,77 +614,77 @@ private:
     Option<PrepareRollback> m_prepare_rollback;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<owe::resource_registry::GraphicsResourcePreparer,
-            owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto PreparePipeline(owe::resource::PipelineUseHandle     pipeline_use,
-                         owe::resource::RenderPassUseHandle   render_pass_use,
-                         const owe::vulkan::Device&           device,
-                         owe::vulkan::PipelineResourceRequest request)
-        -> Result<owe::resource_registry::PipelinePreparation, owe::resource::ResourceError> {
+struct Impl<vrento::resource_registry::GraphicsResourcePreparer,
+            vrento::resource_registry::RenderResourceSystem>
+    : ImplBase<vrento::resource_registry::RenderResourceSystem> {
+    auto PreparePipeline(vrento::resource::PipelineUseHandle     pipeline_use,
+                         vrento::resource::RenderPassUseHandle   render_pass_use,
+                         const vrento::vulkan::Device&           device,
+                         vrento::vulkan::PipelineResourceRequest request)
+        -> Result<vrento::resource_registry::PipelinePreparation, vrento::resource::ResourceError> {
         return this->self().PreparePipeline(
             pipeline_use, render_pass_use, device, rstd::move(request));
     }
 
-    auto PrepareFramebuffer(owe::resource::FramebufferUseHandle                 framebuffer_use,
-                            owe::resource::RenderPassUseHandle                  render_pass_use,
-                            const owe::vulkan::Device&                          device,
-                            std::vector<owe::vulkan::FramebufferAttachmentDesc> attachments,
+    auto PrepareFramebuffer(vrento::resource::FramebufferUseHandle                 framebuffer_use,
+                            vrento::resource::RenderPassUseHandle                  render_pass_use,
+                            const vrento::vulkan::Device&                          device,
+                            std::vector<vrento::vulkan::FramebufferAttachmentDesc> attachments,
                             VkExtent2D                                          extent)
-        -> Result<owe::resource_registry::FramebufferPreparation, owe::resource::ResourceError> {
+        -> Result<vrento::resource_registry::FramebufferPreparation, vrento::resource::ResourceError> {
         return this->self().PrepareFramebuffer(
             framebuffer_use, render_pass_use, device, rstd::move(attachments), extent);
     }
 
-    auto PrepareRenderPass(owe::resource::RenderPassUseHandle         use,
-                           const owe::vulkan::Device&                 device,
-                           const owe::vulkan::RenderPassResourceDesc& desc)
-        -> Result<owe::resource_registry::RenderPassPreparation, owe::resource::ResourceError> {
+    auto PrepareRenderPass(vrento::resource::RenderPassUseHandle         use,
+                           const vrento::vulkan::Device&                 device,
+                           const vrento::vulkan::RenderPassResourceDesc& desc)
+        -> Result<vrento::resource_registry::RenderPassPreparation, vrento::resource::ResourceError> {
         return this->self().PrepareRenderPass(use, device, desc);
     }
 
-    auto PrepareDescriptor(const owe::vulkan::Device&          device,
-                           owe::resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
-                           slice<owe::resource_registry::DescriptorImageBinding>  images,
-                           slice<owe::resource_registry::DescriptorBufferBinding> buffers,
-                           owe::resource_registry::DescriptorBindingReuse         reuse)
-        -> Result<owe::resource::DescriptorBindingHandle, owe::resource::ResourceError> {
+    auto PrepareDescriptor(const vrento::vulkan::Device&          device,
+                           vrento::resource::PipelineLayoutHandle pipeline_layout, u32 set_index,
+                           slice<vrento::resource_registry::DescriptorImageBinding>  images,
+                           slice<vrento::resource_registry::DescriptorBufferBinding> buffers,
+                           vrento::resource_registry::DescriptorBindingReuse         reuse)
+        -> Result<vrento::resource::DescriptorBindingHandle, vrento::resource::ResourceError> {
         return this->self().PrepareDescriptor(
             device, pipeline_layout, set_index, images, buffers, reuse);
     }
 
-    auto UpdateDescriptorImages(owe::resource::DescriptorBindingHandle                handle,
-                                slice<owe::resource_registry::DescriptorImageBinding> images)
-        -> Result<empty, owe::resource::ResourceError> {
+    auto UpdateDescriptorImages(vrento::resource::DescriptorBindingHandle                handle,
+                                slice<vrento::resource_registry::DescriptorImageBinding> images)
+        -> Result<empty, vrento::resource::ResourceError> {
         return this->self().UpdateDescriptorImages(handle, images);
     }
 };
 
 template<>
-struct Impl<owe::resource_registry::ExternalResourcePreparer,
-            owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto PrepareExternal(owe::resource::ExternalUseHandle       external_use,
-                         owe::resource::TextureUseHandle        source_use,
-                         const owe::vulkan::DeviceCapabilities& capabilities,
-                         owe::FrameSurfaceLease lease, rstd::uint32_t graphics_queue_family)
-        -> Result<empty, owe::resource::ResourceError> {
+struct Impl<vrento::resource_registry::ExternalResourcePreparer,
+            vrento::resource_registry::RenderResourceSystem>
+    : ImplBase<vrento::resource_registry::RenderResourceSystem> {
+    auto PrepareExternal(vrento::resource::ExternalUseHandle       external_use,
+                         vrento::resource::TextureUseHandle        source_use,
+                         const vrento::vulkan::DeviceCapabilities& capabilities,
+                         vrento::FrameSurfaceLease lease, rstd::uint32_t graphics_queue_family)
+        -> Result<empty, vrento::resource::ResourceError> {
         return this->self().PrepareExternal(
             external_use, source_use, capabilities, rstd::move(lease), graphics_queue_family);
     }
 };
 
 template<>
-struct Impl<owe::resource::BufferContentWriter, owe::resource_registry::RenderResourceSystem>
-    : ImplBase<owe::resource_registry::RenderResourceSystem> {
-    auto UpdateBuffer(owe::resource::BufferUseHandle use, slice<u8> content)
-        -> Result<empty, owe::resource::ResourceError> {
+struct Impl<vrento::resource::BufferContentWriter, vrento::resource_registry::RenderResourceSystem>
+    : ImplBase<vrento::resource_registry::RenderResourceSystem> {
+    auto UpdateBuffer(vrento::resource::BufferUseHandle use, slice<u8> content)
+        -> Result<empty, vrento::resource::ResourceError> {
         return this->self().UpdateBuffer(use, content);
     }
 };

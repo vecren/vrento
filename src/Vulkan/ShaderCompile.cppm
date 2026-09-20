@@ -1,15 +1,15 @@
 module;
 
-export module wescene.shader_compile;
-import wescene.core;
+export module vrento.shader_compile;
+import vrento.core;
 export import vvk;
-import wescene.types;
+import vrento.types;
 import rstd;
 import rstd.cppstd;
 
 using namespace rstd::prelude;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 // ---------- Spv.hpp ----------
@@ -123,4 +123,4 @@ struct ShaderBackend {
     using Funcs = rstd::TraitFuncs<&T::Preprocess, &T::CompileAndLinkShaderUnits, &T::GenReflect>;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

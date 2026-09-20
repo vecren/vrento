@@ -1,13 +1,13 @@
 module;
 
 #include <rstd/macro.hpp>
-module wescene.vulkan_render;
+module vrento.vulkan_render;
 import rstd.log;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 using namespace rstd::prelude;
 using rstd::cppstd::as_str;
 
@@ -65,7 +65,7 @@ void FinPass::setPresentFormat(VkFormat format) {
 }
 
 bool FinPass::setFrameSurface(
-    owe::FrameSurfaceLease                                                lease,
+    vrento::FrameSurfaceLease                                                lease,
     rstd::mut_ref<rstd::dyn<resource_registry::ExternalResourcePreparer>> resources,
     const DeviceCapabilities& capabilities, rstd::uint32_t graphics_queue_family) {
     if (m_desc.external_use.is_none() || m_desc.result_use.is_none()) return false;
@@ -305,7 +305,7 @@ void FinPass::prepare(Scene& scene, const Device& device, PassPrepareContext& co
     setPrepared();
 }
 
-bool FinPass::ensurePresentFramebuffer(const owe::FrameSurfaceLease& lease) {
+bool FinPass::ensurePresentFramebuffer(const vrento::FrameSurfaceLease& lease) {
     if (! m_device || m_present_render_pass == VK_NULL_HANDLE ||
         lease.image.view == VK_NULL_HANDLE) {
         return false;

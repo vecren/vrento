@@ -1,8 +1,8 @@
-export module wescene.resource_registry:barrier;
+export module vrento.resource_registry:barrier;
 import rstd;
-import wescene.vulkan;
+import vrento.vulkan;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -62,4 +62,4 @@ private:
     rstd::vec::Vec<PreparedImageBarrier> m_barriers;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

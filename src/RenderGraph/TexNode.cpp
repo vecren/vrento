@@ -1,9 +1,9 @@
-module wescene.rgraph;
+module vrento.rgraph;
 import rstd;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
-using namespace owe::rg;
+using namespace vrento::rg;
 
 namespace
 {

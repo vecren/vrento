@@ -11,21 +11,21 @@ module;
 #    include <vulkan/vulkan_metal.h>
 #endif
 
-module wescene.vulkan;
-import wescene.core;
+module vrento.vulkan;
+import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
-import wescene.types;
-import wescene.fs;
+import vrento.types;
+import vrento.fs;
 import wavsen.video;
 
-using namespace owe;
-using namespace owe::vulkan;
+using namespace vrento;
+using namespace vrento::vulkan;
 using namespace rstd::prelude;
 
-namespace owe
+namespace vrento
 {
 namespace vulkan
 {
@@ -43,8 +43,8 @@ VkFormat ToVkType(TextureFormat tf) {
     }
 }
 
-VkSamplerAddressMode ToVkType(owe::TextureWrap sam) {
-    using namespace owe;
+VkSamplerAddressMode ToVkType(vrento::TextureWrap sam) {
+    using namespace vrento;
     switch (sam) {
     case TextureWrap::CLAMP_TO_EDGE: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     case TextureWrap::CLAMP_TO_BORDER: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
@@ -52,8 +52,8 @@ VkSamplerAddressMode ToVkType(owe::TextureWrap sam) {
     default: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
     }
 }
-VkFilter ToVkType(owe::TextureFilter sam) {
-    using namespace owe;
+VkFilter ToVkType(vrento::TextureFilter sam) {
+    using namespace vrento;
     switch (sam) {
     case TextureFilter::LINEAR: return VK_FILTER_LINEAR;
     case TextureFilter::NEAREST:
@@ -61,7 +61,7 @@ VkFilter ToVkType(owe::TextureFilter sam) {
     }
 }
 } // namespace vulkan
-} // namespace owe
+} // namespace vrento
 
 namespace
 {
@@ -573,7 +573,7 @@ Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(Texture
  *   4. Each render tick PumpVideoTextures advances PTS, pulls the
  *      correct frame view for the active decoder kind, and writes the
  *      stable RGBA8 VkImage through wavsen::video::YuvToRgba. Hardware
- *      decode uses OWE's own VkDevice via Producer::from_external so
+ *      decode uses vrento's own VkDevice via Producer::from_external so
  *      conversion and material sampling stay on the same device.
  *
  * ========================================================================= */
@@ -1088,9 +1088,9 @@ namespace rstd
 {
 
 template<>
-struct Impl<owe::vulkan::TextureAllocationRuntime,
-            owe::vulkan::TextureCache::VideoRegistry::Runtime>
-    : ImplBase<owe::vulkan::TextureCache::VideoRegistry::Runtime> {
+struct Impl<vrento::vulkan::TextureAllocationRuntime,
+            vrento::vulkan::TextureCache::VideoRegistry::Runtime>
+    : ImplBase<vrento::vulkan::TextureCache::VideoRegistry::Runtime> {
     void Pump(double seconds) { this->self().Pump(seconds); }
 };
 
@@ -1688,7 +1688,7 @@ void TextureCache::Clear() {
     if (m_video_registry.is_some()) m_video_registry->get()->runtimes.clear();
 }
 
-void owe::vulkan::RecordGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) {
+void vrento::vulkan::RecordGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) {
     VkImageMemoryBarrier barrier {
         .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext               = nullptr,

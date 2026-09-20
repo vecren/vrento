@@ -1,16 +1,16 @@
 module;
 
-export module wescene.vulkan_render:buffer_resolver;
-import wescene.core;
+export module vrento.vulkan_render:buffer_resolver;
+import vrento.core;
 import rstd;
 import rstd.cppstd;
-import wescene.resource_registry;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.resource_registry;
+import vrento.vulkan;
+import vrento.scene;
 
 using namespace rstd::prelude;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 enum class DrawBufferRole
@@ -74,4 +74,4 @@ private:
     rstd::ref<resource_registry::PreparedResourceTable> m_resources;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

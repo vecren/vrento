@@ -1,8 +1,8 @@
-export module wescene.resource_registry:policy;
+export module vrento.resource_registry:policy;
 import rstd;
-import wescene.vulkan;
+import vrento.vulkan;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -45,4 +45,4 @@ private:
     MemoryPressure               m_pressure { MemoryPressure::Normal };
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry

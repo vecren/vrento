@@ -1,13 +1,13 @@
-export module wescene.vulkan_render:uniform_buffer;
+export module vrento.vulkan_render:uniform_buffer;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.scene;
-import wescene.types;
+import vrento.resource;
+import vrento.scene;
+import vrento.types;
 
 using namespace rstd::prelude;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 struct UniformBufferUpdateError {
@@ -260,22 +260,22 @@ auto MakeSharedUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>>,
                                     ShaderMatrixConvention, ShaderMatrixAbi)
     -> Result<Box<dyn<UniformBufferUpdate>>, UniformBufferUpdateError>;
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
 
 export namespace rstd
 {
 
 template<>
-struct Impl<fmt::Display, owe::vulkan::UniformBufferUpdateError>
-    : ImplBase<owe::vulkan::UniformBufferUpdateError> {
+struct Impl<fmt::Display, vrento::vulkan::UniformBufferUpdateError>
+    : ImplBase<vrento::vulkan::UniformBufferUpdateError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         return formatter.write_fmt(fmt::Arguments::make("{}", this->self().message));
     }
 };
 
 template<>
-struct Impl<fmt::Debug, owe::vulkan::UniformBufferUpdateError>
-    : ImplBase<owe::vulkan::UniformBufferUpdateError> {
+struct Impl<fmt::Debug, vrento::vulkan::UniformBufferUpdateError>
+    : ImplBase<vrento::vulkan::UniformBufferUpdateError> {
     auto fmt(fmt::Formatter& formatter) const -> bool {
         return formatter.write_fmt(
             fmt::Arguments::make("UniformBufferUpdateError({})", this->self().message));
@@ -283,9 +283,9 @@ struct Impl<fmt::Debug, owe::vulkan::UniformBufferUpdateError>
 };
 
 template<>
-struct Impl<error::Error, owe::vulkan::UniformBufferUpdateError>
-    : DefaultInImpl<error::Error, owe::vulkan::UniformBufferUpdateError> {};
+struct Impl<error::Error, vrento::vulkan::UniformBufferUpdateError>
+    : DefaultInImpl<error::Error, vrento::vulkan::UniformBufferUpdateError> {};
 
 } // namespace rstd
 
-static_assert(rstd::Impled<owe::vulkan::UniformBufferUpdateError, rstd::error::Error>);
+static_assert(rstd::Impled<vrento::vulkan::UniformBufferUpdateError, rstd::error::Error>);

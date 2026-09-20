@@ -3,15 +3,15 @@ module;
 #include <rstd/macro.hpp>
 #include "vvk/macros.hpp"
 
-module wescene.vulkan_render;
-import wescene.spec_names;
-import wescene.core;
+module vrento.vulkan_render;
+import vrento.spec_names;
+import vrento.core;
 import rstd.log;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::cppstd::as_str;
@@ -21,10 +21,10 @@ CustomShaderPass::~CustomShaderPass() {}
 
 namespace
 {
-Option<TextureRequest> TextureRequestFromScene(owe::Scene& scene, std::string_view name) {
+Option<TextureRequest> TextureRequestFromScene(vrento::Scene& scene, std::string_view name) {
     if (name.empty()) return None();
     auto text = as_str(name).unwrap();
-    if (! owe::IsSpecTex(text)) return Some(MakeImportedTextureRequest(name));
+    if (! vrento::IsSpecTex(text)) return Some(MakeImportedTextureRequest(name));
     auto target = scene.RenderTarget(text);
     if (target.is_none()) return None();
     return Some(MakeRenderTargetTextureRequest(name, **target));
@@ -32,8 +32,8 @@ Option<TextureRequest> TextureRequestFromScene(owe::Scene& scene, std::string_vi
 
 bool IsDepthSampled(const TextureBindingRequest& binding) {
     return binding.request.is_some() && binding.request->definition.is_some() &&
-           owe::resource::HasTextureUsage(binding.request->definition->usage,
-                                          owe::resource::TextureUsage::DepthAttachment);
+           vrento::resource::HasTextureUsage(binding.request->definition->usage,
+                                          vrento::resource::TextureUsage::DepthAttachment);
 }
 
 VkImageLayout SampledLayout(const TextureBindingRequest& binding) {
@@ -41,7 +41,7 @@ VkImageLayout SampledLayout(const TextureBindingRequest& binding) {
                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-owe::SceneMaterial* ResolvePassMaterial(const CustomShaderPass::Desc& desc) {
+vrento::SceneMaterial* ResolvePassMaterial(const CustomShaderPass::Desc& desc) {
     if (desc.material_override) return desc.material_override.get();
     if (desc.node.is_none() || ! (*desc.node)->MeshShared()) return nullptr;
     const auto& mesh          = *(*desc.node)->MeshShared();
@@ -419,9 +419,9 @@ auto CustomShaderPass::globalDescriptorBufferUses(const PreparedPassResources& r
     return Ok(rstd::move(uses));
 }
 
-Option<owe::RenderItemId> CustomShaderPass::renderItemId() const {
+Option<vrento::RenderItemId> CustomShaderPass::renderItemId() const {
     if (! m_desc.render_item.Valid()) return None();
-    return Some<owe::RenderItemId>(m_desc.render_item);
+    return Some<vrento::RenderItemId>(m_desc.render_item);
 }
 
 Option<PipelineCacheKey> CustomShaderPass::pipelineCacheKey() const {

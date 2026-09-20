@@ -1,10 +1,10 @@
 module;
 
-module wescene.vulkan;
-import wescene.types;
+module vrento.vulkan;
+import vrento.types;
 import rstd.cppstd;
 
-namespace owe
+namespace vrento
 {
 namespace vulkan
 {
@@ -92,4 +92,4 @@ ImageSlotsRef::ImageSlotsRef(const ImageSlots& o) {
 }
 
 } // namespace vulkan
-} // namespace owe
+} // namespace vrento

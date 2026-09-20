@@ -5,21 +5,21 @@ module;
 
 #include "vvk/macros.hpp"
 
-module wescene.vulkan;
-import wescene.core;
-import wescene.types;
+module vrento.vulkan;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
 using namespace rstd::prelude;
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 namespace
 {
 
-inline VkShaderStageFlagBits ToVkType(owe::ShaderType stage) {
-    using namespace owe;
+inline VkShaderStageFlagBits ToVkType(vrento::ShaderType stage) {
+    using namespace vrento;
     switch (stage) {
     case ShaderType::VERTEX: return VK_SHADER_STAGE_VERTEX_BIT;
     case ShaderType::FRAGMENT: return VK_SHADER_STAGE_FRAGMENT_BIT;

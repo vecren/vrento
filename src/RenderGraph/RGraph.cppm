@@ -1,4 +1,4 @@
-export module wescene.rgraph;
+export module vrento.rgraph;
 
 export import :dependency_graph;
 export import :pass;

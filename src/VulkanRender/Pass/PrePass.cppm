@@ -1,15 +1,15 @@
 module;
 
-export module wescene.vulkan_render:pre_pass;
-import wescene.spec_names;
+export module vrento.vulkan_render:pre_pass;
+import vrento.spec_names;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 import :vulkan_pass;
 import :resource;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 class PrePass : public VulkanPass {
@@ -51,4 +51,4 @@ private:
     Desc m_desc;
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

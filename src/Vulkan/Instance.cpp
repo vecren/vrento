@@ -8,15 +8,15 @@ module;
 #    include <vulkan/vulkan_metal.h>
 #endif
 
-module wescene.vulkan;
-import wescene.core;
-import wescene.types;
+module vrento.vulkan;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
 
 using namespace rstd::prelude;
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 
 constexpr rstd::array<InstanceLayer, 0> base_inst_layers {};
 
@@ -128,12 +128,12 @@ bool CreateInstance(vvk::Instance* inst, std::span<const std::string_view> exts,
     }
     return true;
 }
-void EnumateExts(owe::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
+void EnumateExts(vrento::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
     if (auto rv = vvk::EnumerateInstanceExtensionProperties(dld); rv.is_some()) {
         for (const auto& ext : *rv) set.insert(ext.extensionName);
     }
 }
-void EnumateLayers(owe::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
+void EnumateLayers(vrento::Set<std::string>& set, const vvk::GlobalDispatch& dld) {
     if (auto rv = vvk::EnumerateInstanceLayerProperties(dld); rv.is_some()) {
         for (const auto& ext : *rv) set.insert(ext.layerName);
     }

@@ -1,4 +1,4 @@
-export module wescene.resource:plan;
+export module vrento.resource:plan;
 import rstd;
 import :handle;
 import :error;
@@ -6,7 +6,7 @@ import :texture;
 import :buffer;
 import :shader;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -171,4 +171,4 @@ inline auto VisitResourcePlan(const ResourcePlan& plan, mut_ref<dyn<ResourcePlan
     return Ok(empty {});
 }
 
-} // namespace owe::resource
+} // namespace vrento::resource

@@ -1,12 +1,12 @@
 module;
 
-export module wescene.vulkan_render:pass_common;
+export module vrento.vulkan_render:pass_common;
 import rstd.cppstd;
-import wescene.types;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.types;
+import vrento.vulkan;
+import vrento.scene;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
@@ -101,4 +101,4 @@ inline std::string MsaaTwinName(std::string_view tex_name, VkSampleCountFlagBits
     return std::string(tex_name) + "::msaa" + std::to_string((unsigned)samples);
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

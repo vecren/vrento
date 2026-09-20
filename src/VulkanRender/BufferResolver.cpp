@@ -1,13 +1,13 @@
-module wescene.vulkan_render;
-import wescene.core;
+module vrento.vulkan_render;
+import vrento.core;
 import rstd;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 using namespace rstd::prelude;
 
-namespace owe::vulkan
+namespace vrento::vulkan
 {
 
 namespace
@@ -177,4 +177,4 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(
     return true;
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

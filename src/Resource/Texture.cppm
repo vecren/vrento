@@ -1,9 +1,9 @@
-export module wescene.resource:texture;
+export module vrento.resource:texture;
 import rstd;
-import wescene.types;
+import vrento.types;
 import :handle;
 
-export namespace owe::resource
+export namespace vrento::resource
 {
 
 using namespace rstd::prelude;
@@ -208,4 +208,4 @@ inline bool SetTextureRequestIfChanged(Option<TextureRequest>& target, TextureRe
     return SetTextureRequestIfChanged(target, Some(rstd::move(request)));
 }
 
-} // namespace owe::resource
+} // namespace vrento::resource

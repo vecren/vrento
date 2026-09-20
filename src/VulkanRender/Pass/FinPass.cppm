@@ -1,15 +1,15 @@
 module;
 
-export module wescene.vulkan_render:fin_pass;
-import wescene.spec_names;
+export module vrento.vulkan_render:fin_pass;
+import vrento.spec_names;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
 import :vulkan_pass;
 import :resource;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 // Final pass: present the scene render target into the frame surface. Window
@@ -33,7 +33,7 @@ public:
     FinPass(Desc&&);
     virtual ~FinPass();
 
-    bool setFrameSurface(owe::FrameSurfaceLease,
+    bool setFrameSurface(vrento::FrameSurfaceLease,
                          rstd::mut_ref<rstd::dyn<resource_registry::ExternalResourcePreparer>>,
                          const DeviceCapabilities&, rstd::uint32_t graphics_queue_family);
     void setPresentFormat(VkFormat);
@@ -52,7 +52,7 @@ public:
     void destory(const Device&) override;
 
 private:
-    bool ensurePresentFramebuffer(const owe::FrameSurfaceLease&);
+    bool ensurePresentFramebuffer(const vrento::FrameSurfaceLease&);
 
     Desc             m_desc;
     const Device*    m_device { nullptr };
@@ -66,4 +66,4 @@ private:
     bool             m_path_logged { false };
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

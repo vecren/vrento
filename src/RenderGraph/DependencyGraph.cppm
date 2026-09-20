@@ -1,9 +1,9 @@
-export module wescene.rgraph:dependency_graph;
+export module vrento.rgraph:dependency_graph;
 import rstd;
 
 using namespace rstd::prelude;
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 struct NodeHandle {
@@ -14,16 +14,16 @@ struct NodeHandle {
     friend auto operator<=>(const NodeHandle&, const NodeHandle&) = default;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg
 
 export namespace rstd
 {
 
 template<>
-struct Impl<Copy, owe::rg::NodeHandle> {};
+struct Impl<Copy, vrento::rg::NodeHandle> {};
 
 template<>
-struct Impl<hash::Hash, owe::rg::NodeHandle> : ImplBase<owe::rg::NodeHandle> {
+struct Impl<hash::Hash, vrento::rg::NodeHandle> : ImplBase<vrento::rg::NodeHandle> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -33,7 +33,7 @@ struct Impl<hash::Hash, owe::rg::NodeHandle> : ImplBase<owe::rg::NodeHandle> {
 
 } // namespace rstd
 
-export namespace owe::rg
+export namespace vrento::rg
 {
 
 struct Node {
@@ -77,4 +77,4 @@ private:
     LinkMap m_nodes;
 };
 
-} // namespace owe::rg
+} // namespace vrento::rg

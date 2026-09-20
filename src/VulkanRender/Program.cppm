@@ -2,18 +2,18 @@ module;
 #include <rstd/macro.hpp>
 #include "vvk/macros.hpp"
 
-export module wescene.vulkan_render:program;
-import wescene.core;
-import wescene.types;
+export module vrento.vulkan_render:program;
+import vrento.core;
+import vrento.types;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wescene.load_bench;
-import wescene.resource_registry;
-import wescene.vulkan;
-import wescene.scene;
-import wescene.spec_names;
-import wescene.rgraph;
+import vrento.load_bench;
+import vrento.resource_registry;
+import vrento.vulkan;
+import vrento.scene;
+import vrento.spec_names;
+import vrento.rgraph;
 import :vulkan_pass;
 import :resource;
 import :pipeline_layout;
@@ -27,7 +27,7 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::cppstd::as_str;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 class DeclaredShaderArtifactProvider {
 public:
@@ -51,7 +51,7 @@ private:
     rstd::ref<ResourceDeclarationContext> m_declarations;
 };
 
-inline bool SameProgramRenderItemId(owe::RenderItemId lhs, owe::RenderItemId rhs) {
+inline bool SameProgramRenderItemId(vrento::RenderItemId lhs, vrento::RenderItemId rhs) {
     return lhs.index == rhs.index && lhs.generation == rhs.generation;
 }
 
@@ -103,9 +103,9 @@ struct RenderProgram {
 
     struct PreparedPassRecord {
         PreparedPassKind                kind { PreparedPassKind::Graph };
-        Option<owe::rg::NodeHandle>     graph_node;
+        Option<vrento::rg::NodeHandle>     graph_node;
         String                          pass_name;
-        Option<owe::rg::PassNode::Type> pass_type;
+        Option<vrento::rg::PassNode::Type> pass_type;
         ProgramPassHandle               pass;
         rstd::vec::Vec<String>          release_textures;
         PassResourceUses                resources;
@@ -140,7 +140,7 @@ struct RenderProgram {
             resolved.resetPrepared();
         }
 
-        void prepareIfNeeded(VulkanPass& resolved, owe::Scene& scene, const Device& device,
+        void prepareIfNeeded(VulkanPass& resolved, vrento::Scene& scene, const Device& device,
                              PassPrepareContext& context) {
             if (invalidated() && resolved.prepared()) {
                 resetPrepared(resolved, device);
@@ -159,9 +159,9 @@ struct RenderProgram {
 
     rstd::vec::Vec<PreparedPassRecord>                      pass_records;
     rstd::vec::Vec<RenderPassScope>                         scopes;
-    owe::resource::ResourcePlan                             resource_plan;
+    vrento::resource::ResourcePlan                             resource_plan;
     rstd::usize                                             graph_texture_count { 0 };
-    rstd::Option<rstd::mut_ref<owe::rg::RenderGraph>>       graph;
+    rstd::Option<rstd::mut_ref<vrento::rg::RenderGraph>>       graph;
     rstd::vec::Vec<rstd::mut_ref<VulkanPass>>               frame_passes;
     rstd::Option<rstd::mut_ref<PrePass>>                    frame_prepass;
     rstd::Option<rstd::mut_ref<FinPass>>                    frame_finpass;
@@ -208,12 +208,12 @@ struct RenderProgram {
         }
         if (graph.is_none()) return rstd::None();
         auto resolved =
-            static_cast<const owe::rg::RenderGraph&>(**graph).getPass(record.pass.graph);
+            static_cast<const vrento::rg::RenderGraph&>(**graph).getPass(record.pass.graph);
         if (resolved.is_none()) return rstd::None();
         return rstd::Some<const VulkanPass&>(static_cast<const VulkanPass&>(*resolved));
     }
 
-    bool buildFromGraph(owe::rg::RenderGraph& graph) {
+    bool buildFromGraph(vrento::rg::RenderGraph& graph) {
         auto ordered = graph.topologicalOrder();
         if (ordered.is_err()) {
             clear();
@@ -225,7 +225,7 @@ struct RenderProgram {
 
         clear();
         this->graph =
-            rstd::Some(rstd::mut_ref<owe::rg::RenderGraph>::from_raw_parts(rstd::addressof(graph)));
+            rstd::Some(rstd::mut_ref<vrento::rg::RenderGraph>::from_raw_parts(rstd::addressof(graph)));
         resource_plan       = rstd::move(plan);
         graph_texture_count = resource_plan.textures.len();
         pass_records =
@@ -349,7 +349,7 @@ struct RenderProgram {
         }
     }
 
-    void invalidateRenderItems(slice<owe::RenderItemId> render_items, PassInvalidationFlags flags) {
+    void invalidateRenderItems(slice<vrento::RenderItemId> render_items, PassInvalidationFlags flags) {
         if (flags == PassInvalidationNone || render_items.is_empty()) return;
         for (auto& record : pass_records) {
             auto pass = resolve(record);
@@ -368,8 +368,8 @@ struct RenderProgram {
         }
     }
 
-    bool refreshMaterialTextureBindings(const owe::RenderSceneSnapshot& render_scene,
-                                        slice<owe::RenderItemId>        render_items) {
+    bool refreshMaterialTextureBindings(const vrento::RenderSceneSnapshot& render_scene,
+                                        slice<vrento::RenderItemId>        render_items) {
         if (render_items.is_empty()) return false;
 
         bool requires_graph_rebuild = false;
@@ -397,7 +397,7 @@ struct RenderProgram {
         return requires_graph_rebuild;
     }
 
-    void finalizeRenderTargetSizes(owe::Scene& scene, VkExtent2D extent,
+    void finalizeRenderTargetSizes(vrento::Scene& scene, VkExtent2D extent,
                                    VkExtent2D            max_framebuffer_extent,
                                    VkSampleCountFlagBits msaa_samples) {
         auto names = scene.RenderTargetNames();
@@ -464,14 +464,14 @@ struct RenderProgram {
             }
         }
         if (msaa_samples != VK_SAMPLE_COUNT_1_BIT) {
-            auto target = scene.RenderTargetMut(owe::SpecTex_Default);
+            auto target = scene.RenderTargetMut(vrento::SpecTex_Default);
             if (target.is_some()) {
                 (**target).sample_count = static_cast<unsigned>(msaa_samples);
             }
         }
     }
 
-    void finalizeFramePassRequests(owe::Scene& scene) {
+    void finalizeFramePassRequests(vrento::Scene& scene) {
         if (frame_prepass.is_none() || frame_finpass.is_none()) return;
 
         auto& prepass        = **frame_prepass;
@@ -485,7 +485,7 @@ struct RenderProgram {
             .frame_index = rstd::usize(1),
         };
 
-        const auto key    = rstd::cppstd::to_string(owe::SpecTex_Default);
+        const auto key    = rstd::cppstd::to_string(vrento::SpecTex_Default);
         auto       target = scene.RenderTarget(as_str(key).unwrap());
         if (target.is_none()) {
             if (prepass.setResultRequest(rstd::None())) {
@@ -526,7 +526,7 @@ struct RenderProgram {
         }
     }
 
-    void finalizeResourceRequests(owe::Scene& scene) {
+    void finalizeResourceRequests(vrento::Scene& scene) {
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (pass.is_none()) continue;
@@ -553,8 +553,8 @@ struct RenderProgram {
         }
     }
 
-    auto beginPrepare(owe::Scene& scene, const Device& device, RenderingResources& rr,
-                      const owe::RenderSceneSnapshot& render_scene,
+    auto beginPrepare(vrento::Scene& scene, const Device& device, RenderingResources& rr,
+                      const vrento::RenderSceneSnapshot& render_scene,
                       resource::ResourcePlanSections  sections = resource::ResourcePlanAll,
                       SceneLoadBenchRecorderView load_bench    = {}) -> RenderProgramPrepareStatus {
         auto prepare_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_resources_prepare);
@@ -592,17 +592,17 @@ struct RenderProgram {
             render_scene, ref<Scene>::from_raw_parts(rstd::addressof(scene)));
         SnapshotTexturePrepareObserver texture_observer(load_bench);
         auto                           content =
-            rstd::dyn<owe::resource::TextureContentProvider>::from_ref(imported_textures);
+            rstd::dyn<vrento::resource::TextureContentProvider>::from_ref(imported_textures);
         auto observer =
-            rstd::dyn<owe::resource::TexturePrepareObserver>::from_ref(texture_observer);
+            rstd::dyn<vrento::resource::TexturePrepareObserver>::from_ref(texture_observer);
         auto buffer_content =
-            rstd::dyn<owe::resource::BufferContentProvider>::from_ref(declarations);
+            rstd::dyn<vrento::resource::BufferContentProvider>::from_ref(declarations);
         DeclaredShaderArtifactProvider declared_shaders(declarations);
         auto                           shader_artifacts =
-            rstd::dyn<owe::resource::ShaderArtifactProvider>::from_ref(declared_shaders);
+            rstd::dyn<vrento::resource::ShaderArtifactProvider>::from_ref(declared_shaders);
         auto started =
             rr.resources.BeginPreparePlan(resource_plan,
-                                          owe::resource_registry::ResourceContentProviders {
+                                          vrento::resource_registry::ResourceContentProviders {
                                               .texture = rstd::Some(content),
                                               .buffer  = rstd::Some(buffer_content.as_mut_ref()),
                                               .shader  = rstd::Some(shader_artifacts.as_mut_ref()),
@@ -618,13 +618,13 @@ struct RenderProgram {
         return continuePrepare(scene, device, rr, load_bench);
     }
 
-    auto continuePrepare(owe::Scene& scene, const Device& device, RenderingResources& rr,
+    auto continuePrepare(vrento::Scene& scene, const Device& device, RenderingResources& rr,
                          SceneLoadBenchRecorderView load_bench = {}) -> RenderProgramPrepareStatus {
         auto prepare_span = SceneLoadSpan(load_bench, &SceneLoadProbeIds::render_resources_prepare);
         if (resource_prepare_session.is_none()) return RenderProgramPrepareStatus::Failed;
         SnapshotTexturePrepareObserver texture_observer(load_bench);
         auto                           observer =
-            rstd::dyn<owe::resource::TexturePrepareObserver>::from_ref(texture_observer);
+            rstd::dyn<vrento::resource::TexturePrepareObserver>::from_ref(texture_observer);
         auto progress = rr.resources.ContinuePreparePlan(*resource_prepare_session,
                                                          Some(observer.as_mut_ref()));
         if (progress.is_err()) {
@@ -640,9 +640,9 @@ struct RenderProgram {
         return finishPrepare(scene, device, rr);
     }
 
-    auto finishPrepare(owe::Scene& scene, const Device& device, RenderingResources& rr)
+    auto finishPrepare(vrento::Scene& scene, const Device& device, RenderingResources& rr)
         -> RenderProgramPrepareStatus {
-        auto state_preparer = rstd::dyn<owe::resource_registry::TextureStatePreparer>::from_ref(
+        auto state_preparer = rstd::dyn<vrento::resource_registry::TextureStatePreparer>::from_ref(
             rr.resources.States());
         for (auto& record : pass_records) {
             auto pass = resolve(record);
@@ -724,7 +724,7 @@ struct RenderProgram {
         if (layout_assignment_changed) loaded = false;
         pipeline_layout_assignments = rstd::move(next_layout_assignments);
         auto graphics =
-            rstd::dyn<owe::resource_registry::GraphicsResourcePreparer>::from_ref(rr.resources);
+            rstd::dyn<vrento::resource_registry::GraphicsResourcePreparer>::from_ref(rr.resources);
 
         auto global_uses = Vec<GlobalDescriptorBufferUse>::make();
         for (auto& record : pass_records) {
@@ -824,7 +824,7 @@ struct RenderProgram {
         }
         PassPrepareContext prepare_context {
             .shader_backend = (*rr.shader_reflection_cache)->Backend(),
-            .resources = rstd::ref<owe::resource_registry::PreparedResourceTable>::from_raw_parts(
+            .resources = rstd::ref<vrento::resource_registry::PreparedResourceTable>::from_raw_parts(
                 rstd::addressof(rr.resources.Prepared())),
             .graphics         = graphics.as_mut_ref(),
             .pipeline_layouts = rstd::ref<PipelineLayoutAssignments>::from_raw_parts(
@@ -1114,4 +1114,4 @@ struct RenderProgram {
     }
 };
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan

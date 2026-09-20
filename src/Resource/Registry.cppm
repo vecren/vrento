@@ -1,5 +1,5 @@
-export module wescene.resource_registry;
-export import wescene.resource;
+export module vrento.resource_registry;
+export import vrento.resource;
 export import :resource_key;
 export import :graphics;
 export import :texture_registry;

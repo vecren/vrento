@@ -2,16 +2,16 @@ module;
 
 #include <vulkan/vulkan_core.h>
 
-export module wescene.resource_registry:resource_key;
+export module vrento.resource_registry:resource_key;
 import rstd;
 import rstd.cppstd;
-import wescene.resource;
-import wescene.types;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.types;
+import vrento.vulkan;
 
 using namespace rstd::prelude;
 
-export namespace owe::vulkan
+export namespace vrento::vulkan
 {
 
 struct PipelineResourceRequest {
@@ -289,7 +289,7 @@ inline void WriteCacheKey(PipelineKeyWriter& writer, const RenderPassCacheKey& k
 inline void WritePipelineShaderStages(PipelineKeyWriter&         writer,
                                       std::span<const ShaderSpv> stages) {
     struct StageRecord {
-        owe::ShaderType                  stage;
+        vrento::ShaderType                  stage;
         std::string_view                 entry_point;
         const std::vector<unsigned int>* spirv { nullptr };
     };
@@ -639,13 +639,13 @@ inline FramebufferCacheKey MakeFramebufferCacheKey(const FramebufferResourceRequ
     return MakeFramebufferCacheKey(MakeFramebufferResourceDesc(request));
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
 
 export namespace rstd
 {
 
 template<>
-struct Impl<hash::Hash, owe::vulkan::PipelineCacheKey> : ImplBase<owe::vulkan::PipelineCacheKey> {
+struct Impl<hash::Hash, vrento::vulkan::PipelineCacheKey> : ImplBase<vrento::vulkan::PipelineCacheKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -654,8 +654,8 @@ struct Impl<hash::Hash, owe::vulkan::PipelineCacheKey> : ImplBase<owe::vulkan::P
 };
 
 template<>
-struct Impl<hash::Hash, owe::vulkan::RenderPassCacheKey>
-    : ImplBase<owe::vulkan::RenderPassCacheKey> {
+struct Impl<hash::Hash, vrento::vulkan::RenderPassCacheKey>
+    : ImplBase<vrento::vulkan::RenderPassCacheKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {
@@ -664,8 +664,8 @@ struct Impl<hash::Hash, owe::vulkan::RenderPassCacheKey>
 };
 
 template<>
-struct Impl<hash::Hash, owe::vulkan::FramebufferCacheKey>
-    : ImplBase<owe::vulkan::FramebufferCacheKey> {
+struct Impl<hash::Hash, vrento::vulkan::FramebufferCacheKey>
+    : ImplBase<vrento::vulkan::FramebufferCacheKey> {
     template<typename H>
         requires Impled<H, hash::Hasher>
     void hash(H& state) const noexcept {

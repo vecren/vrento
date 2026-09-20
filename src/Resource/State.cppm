@@ -1,12 +1,12 @@
-export module wescene.resource_registry:state;
+export module vrento.resource_registry:state;
 import rstd;
-import wescene.resource;
-import wescene.vulkan;
+import vrento.resource;
+import vrento.vulkan;
 
 import :prepared;
 import :barrier;
 
-export namespace owe::resource_registry
+export namespace vrento::resource_registry
 {
 
 using namespace rstd::prelude;
@@ -198,23 +198,23 @@ private:
     TextureUseMap m_uses;
 };
 
-} // namespace owe::resource_registry
+} // namespace vrento::resource_registry
 
 export namespace rstd
 {
 
 template<>
-struct Impl<owe::resource_registry::TextureStatePreparer,
-            owe::resource_registry::ResourceStateTracker>
-    : ImplBase<owe::resource_registry::ResourceStateTracker> {
-    auto Prepare(owe::resource::TextureUseHandle                 use,
-                 owe::resource_registry::TextureStateKind        target,
-                 owe::resource_registry::TextureSubresourceRange range, bool discard)
-        -> Option<owe::resource_registry::PreparedImageBarrier> {
+struct Impl<vrento::resource_registry::TextureStatePreparer,
+            vrento::resource_registry::ResourceStateTracker>
+    : ImplBase<vrento::resource_registry::ResourceStateTracker> {
+    auto Prepare(vrento::resource::TextureUseHandle                 use,
+                 vrento::resource_registry::TextureStateKind        target,
+                 vrento::resource_registry::TextureSubresourceRange range, bool discard)
+        -> Option<vrento::resource_registry::PreparedImageBarrier> {
         return this->self().Prepare(use, target, range, discard);
     }
 
-    bool Set(owe::resource::TextureUseHandle use, owe::resource_registry::TextureStateKind state) {
+    bool Set(vrento::resource::TextureUseHandle use, vrento::resource_registry::TextureStateKind state) {
         return this->self().Set(use, state);
     }
 };

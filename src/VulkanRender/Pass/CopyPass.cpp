@@ -2,16 +2,16 @@ module;
 
 #include <rstd/macro.hpp>
 
-module wescene.vulkan_render;
-import wescene.spec_names;
-import wescene.core;
+module vrento.vulkan_render;
+import vrento.spec_names;
+import vrento.core;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
-import wescene.vulkan;
-import wescene.scene;
+import vrento.vulkan;
+import vrento.scene;
 
-using namespace owe::vulkan;
+using namespace vrento::vulkan;
 using namespace rstd::prelude;
 using rstd::cppstd::as_str;
 

@@ -2,17 +2,17 @@ module;
 
 #include <rstd/macro.hpp>
 
-module wescene.vulkan_render;
+module vrento.vulkan_render;
 import rstd;
 import rstd.cppstd;
 import rstd.log;
-import wescene.resource;
-import wescene.scene;
+import vrento.resource;
+import vrento.scene;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
-namespace owe::vulkan
+namespace vrento::vulkan
 {
 
 auto ProgramUniformFrameContext::TextureFrame(SceneDrawItemId draw, usize texture_index) const
@@ -290,9 +290,9 @@ public:
 
 } // namespace detail
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
 
-namespace owe::vulkan
+namespace vrento::vulkan
 {
 
 namespace
@@ -873,4 +873,4 @@ auto MakeUniformBufferBinding(ref<dyn<UniformBindingPrepareContext>> prepare,
     return Ok(Box<dyn<UniformBufferUpdate>>::make(rstd::move(binding)));
 }
 
-} // namespace owe::vulkan
+} // namespace vrento::vulkan
