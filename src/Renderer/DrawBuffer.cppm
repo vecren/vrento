@@ -32,6 +32,7 @@ struct DrawBufferRefs {
     RenderItemId                      render_item;
     u64                               allocation_generation {};
     bool                              dynamic { false };
+    bool                              content_confirmed { false };
     u32                               draw_count {};
     Vec<DrawBufferKey>                vertex_keys;
     Option<DrawBufferKey>             index_key;

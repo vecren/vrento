@@ -82,7 +82,9 @@ auto RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request)
     DrawBufferRefs out;
     out.render_item = request.render_item;
     out.dynamic     = request.geometry.dynamic;
-    out.draw_count  = *count;
+    // Reused dynamic allocations can still contain an earlier geometry version.
+    out.content_confirmed = ! out.dynamic;
+    out.draw_count        = *count;
     if (out.dynamic)
         out.allocation_generation = request.dynamic_allocation_generation != u64()
                                         ? request.dynamic_allocation_generation
@@ -130,7 +132,9 @@ auto RenderBufferResolver::updateDynamicDrawBuffers(
 
     for (usize i {}; i < geometry.vertices.len(); ++i) {
         const auto& view = geometry.vertices[i];
-        if (buffers.vertex_keys[i].data_generation == view.data_generation) continue;
+        if (buffers.content_confirmed &&
+            buffers.vertex_keys[i].data_generation == view.data_generation)
+            continue;
         if (! buffers.dynamic) return reprepare();
         auto updated = writer->UpdateBuffer(buffers.vertices[i], view.bytes);
         if (updated.is_err())
@@ -139,7 +143,8 @@ auto RenderBufferResolver::updateDynamicDrawBuffers(
                                         rstd::move(updated).unwrap_err_unchecked().message });
     }
     if (geometry.index.is_some() &&
-        buffers.index_key->data_generation != geometry.index->data_generation) {
+        (! buffers.content_confirmed ||
+         buffers.index_key->data_generation != geometry.index->data_generation)) {
         if (! buffers.dynamic) return reprepare();
         auto updated = writer->UpdateBuffer(*buffers.index, geometry.index->bytes);
         if (updated.is_err())
@@ -152,7 +157,8 @@ auto RenderBufferResolver::updateDynamicDrawBuffers(
         buffers.vertex_keys[i].data_generation = geometry.vertices[i].data_generation;
     if (geometry.index.is_some())
         buffers.index_key->data_generation = geometry.index->data_generation;
-    buffers.draw_count = *count;
+    buffers.draw_count        = *count;
+    buffers.content_confirmed = true;
     return Ok(empty {});
 }
 } // namespace vrento

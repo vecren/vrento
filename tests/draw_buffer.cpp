@@ -73,7 +73,25 @@ int main() {
     request.dynamic_allocation_generation = u64();
     rstd_assert(RenderBufferResolver::updateDynamicDrawBuffers(request, primary, sink.as_mut_ref())
                     .is_ok());
-    rstd_assert(writer.writes == usize());
+    rstd_assert(writer.writes == usize(2));
+    rstd_assert(primary.content_confirmed);
+    rstd_assert(RenderBufferResolver::updateDynamicDrawBuffers(request, primary, sink.as_mut_ref())
+                    .is_ok());
+    rstd_assert(writer.writes == usize(2));
+    auto reprepared = resolver.prepareDrawBuffers(request).unwrap();
+    rstd_assert(! reprepared.content_confirmed);
+    writer.fail_on = usize(4);
+    rstd_assert(
+        RenderBufferResolver::updateDynamicDrawBuffers(request, reprepared, sink.as_mut_ref())
+            .is_err());
+    rstd_assert(! reprepared.content_confirmed);
+    writer.fail_on = usize();
+    rstd_assert(
+        RenderBufferResolver::updateDynamicDrawBuffers(request, reprepared, sink.as_mut_ref())
+            .is_ok());
+    rstd_assert(writer.writes == usize(6));
+    rstd_assert(reprepared.content_confirmed);
+    writer.writes       = usize();
     auto old_generation = primary.vertex_keys[usize()].data_generation;
     first.ResetSize();
     second.ResetSize();
@@ -113,11 +131,14 @@ int main() {
     geometry.index      = Some(indices.BufferView());
     request.buffer_uses = uses.as_slice();
     auto indexed        = resolver.prepareDrawBuffers(request).unwrap();
+    rstd_assert(RenderBufferResolver::updateDynamicDrawBuffers(request, indexed, sink.as_mut_ref())
+                    .is_ok());
+    rstd_assert(writer.writes == usize(9));
     indices.SetRenderDataCount(usize(1));
     geometry.index = Some(indices.BufferView());
     rstd_assert(RenderBufferResolver::updateDynamicDrawBuffers(request, indexed, sink.as_mut_ref())
                     .is_ok());
-    rstd_assert(indexed.draw_count == u32(1) && writer.writes == usize(6));
+    rstd_assert(indexed.draw_count == u32(1) && writer.writes == usize(9));
     geometry.index = None<GeometryBufferView>();
     rstd_assert(RenderBufferResolver::updateDynamicDrawBuffers(request, indexed, sink.as_mut_ref())
                     .is_err());
@@ -144,7 +165,7 @@ int main() {
     rstd_assert(changed_static.is_err());
     rstd_assert(changed_static.unwrap_err_unchecked().kind ==
                 DrawBufferUpdateErrorKind::NeedsReprepare);
-    rstd_assert(writer.writes == usize(6));
+    rstd_assert(writer.writes == usize(9));
 
     GeometryView empty;
     auto         empty_request = DrawBufferRequest { .geometry = empty };
