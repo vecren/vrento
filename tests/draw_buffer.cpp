@@ -16,24 +16,23 @@ struct Writer {
     auto  UpdateBuffer(resource::BufferUseHandle, slice<u8>)
         -> Result<empty, resource::ResourceError> {
         ++writes;
-        if (writes == fail_on)
-            return Err(resource::ResourceError { .message = String::make("failed"_str) });
+        if (writes == fail_on) return Err(resource::ResourceError { .message = "failed"_Str });
         return Ok(empty {});
     }
 };
 
 int main() {
-    VertexArray first({ { "position", VertexType::FLOAT3, false } }, usize(3));
-    VertexArray second({ { "color", VertexType::FLOAT4, false } }, usize(2));
+    VertexArray first({ { "position"_Str, VertexType::FLOAT3, false } }, usize(3));
+    VertexArray second({ { "color"_Str, VertexType::FLOAT4, false } }, usize(2));
     (void)first.RewriteVertices([](VertexWriter& writer) {
         for (int i = 0; i < 3; ++i) rstd_assert(writer.AppendZeroedVertex().is_some());
     });
     (void)second.RewriteVertices([](VertexWriter& writer) {
         for (int i = 0; i < 2; ++i) rstd_assert(writer.AppendZeroedVertex().is_some());
     });
-    IndexArray           indices(usize(3));
-    const rstd::uint32_t input[] { 0, 1, 0 };
-    indices.Assign(usize(), slice<rstd::uint32_t>::from_raw_parts(input, usize(3)));
+    IndexArray     indices(usize(3));
+    const uint32_t input[] { 0, 1, 0 };
+    indices.Assign(usize(), slice<uint32_t>::from_raw_parts(input, usize(3)));
     auto view = [&] {
         GeometryView geometry { .dynamic = true };
         geometry.vertices.push(first.BufferView());
@@ -119,7 +118,7 @@ int main() {
     auto        storage = first.BufferView().storage_generation;
     VertexArray moved(rstd::move(first));
     rstd_assert(moved.BufferView().storage_generation == storage);
-    first    = VertexArray({ { "position", VertexType::FLOAT3, false } }, usize(3));
+    first    = VertexArray({ { "position"_Str, VertexType::FLOAT3, false } }, usize(3));
     geometry = view();
     rstd_assert(first.BufferView().storage_generation != storage);
     auto replaced =

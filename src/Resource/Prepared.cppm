@@ -1,6 +1,5 @@
 export module vrento.resource_registry:prepared;
 import rstd;
-import rstd.cppstd;
 import vrento.resource;
 import vrento.vulkan;
 import vrento.image;
@@ -13,6 +12,9 @@ import :descriptor;
 import :graphics;
 import :external;
 
+using rstd::collections::HashMap;
+using rstd::sync::Arc;
+
 export namespace vrento::resource_registry
 {
 
@@ -20,19 +22,19 @@ using namespace rstd::prelude;
 using namespace rstd::literals;
 
 struct PreparedTexture {
-    resource::TextureUseHandle                 use;
-    resource::TextureHandle                    resource;
-    resource::TextureRequest                   request;
-    rstd::sync::Arc<vulkan::TextureAllocation> physical;
-    vulkan::ImageSlotsRef                      image;
-    u64                                        physical_generation { 0 };
-    resource::ReadyToken                       ready;
+    resource::TextureUseHandle     use;
+    resource::TextureHandle        resource;
+    resource::TextureRequest       request;
+    Arc<vulkan::TextureAllocation> physical;
+    vulkan::ImageSlotsRef          image;
+    u64                            physical_generation { 0 };
+    resource::ReadyToken           ready;
 };
 
 struct PreparedTextureLease {
-    resource::TextureHandle                    resource;
-    rstd::sync::Arc<vulkan::TextureAllocation> physical;
-    u64                                        physical_generation { 0 };
+    resource::TextureHandle        resource;
+    Arc<vulkan::TextureAllocation> physical;
+    u64                            physical_generation { 0 };
 };
 
 struct PreparedBufferUse {
@@ -46,23 +48,23 @@ struct PreparedShaderUse {
 };
 
 struct PreparedPipeline {
-    resource::PipelineUseHandle            use;
-    resource::PipelineHandle               resource;
-    resource::RenderPassHandle             render_pass;
-    rstd::sync::Arc<PipelineResourceEntry> physical;
+    resource::PipelineUseHandle use;
+    resource::PipelineHandle    resource;
+    resource::RenderPassHandle  render_pass;
+    Arc<PipelineResourceEntry>  physical;
 };
 
 struct PreparedRenderPass {
-    resource::RenderPassUseHandle    use;
-    resource::RenderPassHandle       resource;
-    vulkan::RenderPassCacheKey       cache_key;
-    rstd::sync::Arc<vvk::RenderPass> physical;
+    resource::RenderPassUseHandle use;
+    resource::RenderPassHandle    resource;
+    vulkan::RenderPassCacheKey    cache_key;
+    Arc<vvk::RenderPass>          physical;
 };
 
 struct PreparedFramebuffer {
-    resource::FramebufferUseHandle    use;
-    resource::FramebufferHandle       resource;
-    rstd::sync::Arc<vvk::Framebuffer> physical;
+    resource::FramebufferUseHandle use;
+    resource::FramebufferHandle    resource;
+    Arc<vvk::Framebuffer>          physical;
 };
 
 struct PreparedExternalUse {
@@ -71,28 +73,28 @@ struct PreparedExternalUse {
 };
 
 struct PreparedBufferLease {
-    resource::BufferHandle          resource;
-    rstd::sync::Arc<BufferPhysical> physical;
+    resource::BufferHandle resource;
+    Arc<BufferPhysical>    physical;
 };
 
 struct PreparedShaderLease {
-    resource::ShaderHandle          resource;
-    rstd::sync::Arc<ShaderPhysical> physical;
+    resource::ShaderHandle resource;
+    Arc<ShaderPhysical>    physical;
 };
 
 struct PreparedPipelineLease {
-    resource::PipelineHandle               resource;
-    rstd::sync::Arc<PipelineResourceEntry> physical;
+    resource::PipelineHandle   resource;
+    Arc<PipelineResourceEntry> physical;
 };
 
 struct PreparedRenderPassLease {
-    resource::RenderPassHandle       resource;
-    rstd::sync::Arc<vvk::RenderPass> physical;
+    resource::RenderPassHandle resource;
+    Arc<vvk::RenderPass>       physical;
 };
 
 struct PreparedFramebufferLease {
-    resource::FramebufferHandle       resource;
-    rstd::sync::Arc<vvk::Framebuffer> physical;
+    resource::FramebufferHandle resource;
+    Arc<vvk::Framebuffer>       physical;
 };
 
 struct PreparedDescriptorLease {
@@ -106,14 +108,14 @@ struct PreparedExternalLease {
 };
 
 struct PreparedResourceLeases {
-    rstd::vec::Vec<PreparedTextureLease>     textures;
-    rstd::vec::Vec<PreparedBufferLease>      buffers;
-    rstd::vec::Vec<PreparedShaderLease>      shaders;
-    rstd::vec::Vec<PreparedPipelineLease>    pipelines;
-    rstd::vec::Vec<PreparedRenderPassLease>  render_passes;
-    rstd::vec::Vec<PreparedFramebufferLease> framebuffers;
-    rstd::vec::Vec<PreparedDescriptorLease>  descriptors;
-    rstd::vec::Vec<PreparedExternalLease>    externals;
+    Vec<PreparedTextureLease>     textures;
+    Vec<PreparedBufferLease>      buffers;
+    Vec<PreparedShaderLease>      shaders;
+    Vec<PreparedPipelineLease>    pipelines;
+    Vec<PreparedRenderPassLease>  render_passes;
+    Vec<PreparedFramebufferLease> framebuffers;
+    Vec<PreparedDescriptorLease>  descriptors;
+    Vec<PreparedExternalLease>    externals;
 };
 
 class PreparedResourceTable {
@@ -211,7 +213,7 @@ public:
     }
 
     auto Leases() const -> PreparedResourceLeases {
-        auto texture_leases = rstd::vec::Vec<PreparedTextureLease>::with_capacity(m_textures.len());
+        auto texture_leases = Vec<PreparedTextureLease>::with_capacity(m_textures.len());
         auto textures       = m_textures.values();
         for (auto texture = textures.next(); texture.is_some(); texture = textures.next()) {
             texture_leases.push(PreparedTextureLease {
@@ -221,9 +223,8 @@ public:
             });
         }
 
-        auto descriptor_leases =
-            rstd::vec::Vec<PreparedDescriptorLease>::with_capacity(m_descriptors.len());
-        auto descriptors = m_descriptors.values();
+        auto descriptor_leases = Vec<PreparedDescriptorLease>::with_capacity(m_descriptors.len());
+        auto descriptors       = m_descriptors.values();
         for (auto descriptor = descriptors.next(); descriptor.is_some();
              descriptor      = descriptors.next()) {
             descriptor_leases.push(PreparedDescriptorLease {
@@ -233,7 +234,7 @@ public:
             });
         }
 
-        auto buffer_leases = rstd::vec::Vec<PreparedBufferLease>::with_capacity(m_buffers.len());
+        auto buffer_leases = Vec<PreparedBufferLease>::with_capacity(m_buffers.len());
         auto buffers       = m_buffers.values();
         for (auto buffer = buffers.next(); buffer.is_some(); buffer = buffers.next()) {
             buffer_leases.push(PreparedBufferLease {
@@ -242,7 +243,7 @@ public:
             });
         }
 
-        auto shader_leases = rstd::vec::Vec<PreparedShaderLease>::with_capacity(m_shaders.len());
+        auto shader_leases = Vec<PreparedShaderLease>::with_capacity(m_shaders.len());
         auto shaders       = m_shaders.values();
         for (auto shader = shaders.next(); shader.is_some(); shader = shaders.next()) {
             shader_leases.push(PreparedShaderLease {
@@ -251,9 +252,8 @@ public:
             });
         }
 
-        auto pipeline_leases =
-            rstd::vec::Vec<PreparedPipelineLease>::with_capacity(m_pipelines.len());
-        auto pipelines = m_pipelines.values();
+        auto pipeline_leases = Vec<PreparedPipelineLease>::with_capacity(m_pipelines.len());
+        auto pipelines       = m_pipelines.values();
         for (auto pipeline = pipelines.next(); pipeline.is_some(); pipeline = pipelines.next()) {
             pipeline_leases.push(PreparedPipelineLease {
                 .resource = (**pipeline).resource,
@@ -262,7 +262,7 @@ public:
         }
 
         auto render_pass_leases =
-            rstd::vec::Vec<PreparedRenderPassLease>::with_capacity(m_render_passes.len());
+            Vec<PreparedRenderPassLease>::with_capacity(m_render_passes.len());
         auto render_passes = m_render_passes.values();
         for (auto render_pass = render_passes.next(); render_pass.is_some();
              render_pass      = render_passes.next()) {
@@ -273,7 +273,7 @@ public:
         }
 
         auto framebuffer_leases =
-            rstd::vec::Vec<PreparedFramebufferLease>::with_capacity(m_framebuffers.len());
+            Vec<PreparedFramebufferLease>::with_capacity(m_framebuffers.len());
         auto framebuffers = m_framebuffers.values();
         for (auto framebuffer = framebuffers.next(); framebuffer.is_some();
              framebuffer      = framebuffers.next()) {
@@ -282,9 +282,8 @@ public:
                 .physical = (**framebuffer).physical.clone(),
             });
         }
-        auto external_leases =
-            rstd::vec::Vec<PreparedExternalLease>::with_capacity(m_externals.len());
-        auto externals = m_externals.values();
+        auto external_leases = Vec<PreparedExternalLease>::with_capacity(m_externals.len());
+        auto externals       = m_externals.values();
         for (auto external = externals.next(); external.is_some(); external = externals.next()) {
             external_leases.push(PreparedExternalLease {
                 .use   = (**external).use,
@@ -373,7 +372,7 @@ public:
             (void)cloned.Insert(PreparedRenderPass {
                 .use       = render_pass.use,
                 .resource  = render_pass.resource,
-                .cache_key = render_pass.cache_key,
+                .cache_key = render_pass.cache_key.clone(),
                 .physical  = render_pass.physical.clone(),
             });
         }
@@ -419,18 +418,14 @@ public:
     void Remove(resource::ExternalUseHandle use) { (void)m_externals.remove(use); }
 
 private:
-    using TextureMap = rstd::collections::HashMap<resource::TextureUseHandle, PreparedTexture>;
-    using DescriptorMap =
-        rstd::collections::HashMap<resource::DescriptorBindingHandle, PreparedDescriptorBinding>;
-    using BufferMap   = rstd::collections::HashMap<resource::BufferUseHandle, PreparedBufferUse>;
-    using ShaderMap   = rstd::collections::HashMap<resource::ShaderUseHandle, PreparedShaderUse>;
-    using PipelineMap = rstd::collections::HashMap<resource::PipelineUseHandle, PreparedPipeline>;
-    using RenderPassMap =
-        rstd::collections::HashMap<resource::RenderPassUseHandle, PreparedRenderPass>;
-    using FramebufferMap =
-        rstd::collections::HashMap<resource::FramebufferUseHandle, PreparedFramebuffer>;
-    using ExternalMap =
-        rstd::collections::HashMap<resource::ExternalUseHandle, PreparedExternalUse>;
+    using TextureMap     = HashMap<resource::TextureUseHandle, PreparedTexture>;
+    using DescriptorMap  = HashMap<resource::DescriptorBindingHandle, PreparedDescriptorBinding>;
+    using BufferMap      = HashMap<resource::BufferUseHandle, PreparedBufferUse>;
+    using ShaderMap      = HashMap<resource::ShaderUseHandle, PreparedShaderUse>;
+    using PipelineMap    = HashMap<resource::PipelineUseHandle, PreparedPipeline>;
+    using RenderPassMap  = HashMap<resource::RenderPassUseHandle, PreparedRenderPass>;
+    using FramebufferMap = HashMap<resource::FramebufferUseHandle, PreparedFramebuffer>;
+    using ExternalMap    = HashMap<resource::ExternalUseHandle, PreparedExternalUse>;
 
     u64            m_generation { 0 };
     TextureMap     m_textures;
@@ -523,14 +518,14 @@ private:
     };
 
     struct PendingContent {
-        String                                            key;
-        Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback;
-        Vec<PendingUse>                                   uses;
+        String                                key;
+        Option<Arc<rstd::dyn<VideoPlayback>>> playback;
+        Vec<PendingUse>                       uses;
     };
 
     struct DecodedContent {
-        usize                                                   index;
-        Result<rstd::sync::Arc<Image>, resource::ResourceError> image;
+        usize                                       index;
+        Result<Arc<Image>, resource::ResourceError> image;
     };
 
     ResourcePrepareSession(const resource::ResourcePlan&  plan,
@@ -543,7 +538,7 @@ private:
     Vec<PendingContent>                                   m_pending { Vec<PendingContent>::make() };
     usize                                                 m_next_submit {};
     usize                                                 m_completed {};
-    Option<rstd::sync::Arc<dyn<resource::TextureLoader>>> m_loader;
+    Option<Arc<dyn<resource::TextureLoader>>>             m_loader;
     Option<rstd::thread::ThreadPool>                      m_pool;
     Option<rstd::thread::BlockingTaskSet<DecodedContent>> m_tasks;
 };
@@ -672,8 +667,7 @@ public:
                        Option<mut_ref<dyn<resource::TextureContentProvider>>> content,
                        Option<mut_ref<dyn<resource::TexturePrepareObserver>>> observer)
         -> Result<empty, resource::ResourceError> {
-        auto pending_index =
-            rstd::collections::HashMap<resource::ImportedTextureContentIdentity, usize>::make();
+        auto pending_index = HashMap<resource::ImportedTextureContentIdentity, usize>::make();
         TexturePrepareTrace plan_trace(observer, TexturePrepareTrace::Kind::Plan);
 
         for (usize entry_index {}; entry_index < entries.len(); ++entry_index) {
@@ -787,12 +781,12 @@ public:
         const auto worker_count = rstd::min(usize(4), session.m_pending.len());
         auto       builder      = rstd::thread::ThreadPoolBuilder::make();
         builder.worker_count(worker_count);
-        builder.thread_name(String::make("vrento-texture-decode"_str));
+        builder.thread_name("vrento-texture-decode"_Str);
         auto pool = builder.build();
         if (pool.is_err()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
-                .message = String::make("create texture decode thread pool failed"_str),
+                .message = "create texture decode thread pool failed"_Str,
             });
         }
         session.m_pool = Some(rstd::move(pool).unwrap_unchecked());
@@ -801,7 +795,7 @@ public:
         if (tasks.is_err()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
-                .message = String::make("create texture decode task set failed"_str),
+                .message = "create texture decode task set failed"_Str,
             });
         }
         session.m_tasks = Some(rstd::move(tasks).unwrap_unchecked());
@@ -825,14 +819,14 @@ public:
             if (completion.is_none()) {
                 return Err(resource::ResourceError {
                     .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("texture decode task set closed early"_str),
+                    .message = "texture decode task set closed early"_Str,
                 });
             }
             auto decoded = rstd::move(*completion).into_value();
             if (decoded.is_none()) {
                 return Err(resource::ResourceError {
                     .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("texture decode task cancelled"_str),
+                    .message = "texture decode task cancelled"_Str,
                 });
             }
             auto item = rstd::move(decoded).unwrap_unchecked();
@@ -842,7 +836,7 @@ public:
             if (m_textures_backend.is_none()) {
                 return Err(resource::ResourceError {
                     .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("texture backend unavailable"_str),
+                    .message = "texture backend unavailable"_Str,
                 });
             }
 
@@ -851,7 +845,7 @@ public:
                 auto                image = rstd::move(item.image).unwrap_unchecked();
                 auto playback = session.m_pending[item.index].playback.is_some()
                                     ? Some(session.m_pending[item.index].playback->clone())
-                                    : None<rstd::sync::Arc<rstd::dyn<VideoPlayback>>>();
+                                    : None<Arc<rstd::dyn<VideoPlayback>>>();
                 auto created  = (*m_textures_backend)
                                     ->CreateImportedTexture(image.deref(), rstd::move(playback));
                 if (created.is_none()) {
@@ -906,7 +900,7 @@ private:
                 }
                 return Err(resource::ResourceError {
                     .kind    = resource::ResourceErrorKind::BackendFailure,
-                    .message = String::make("submit texture decode task failed"_str),
+                    .message = "submit texture decode task failed"_Str,
                 });
             }
             ++session.m_next_submit;
@@ -925,7 +919,7 @@ private:
     }
 
     auto AllocateTexture(const resource::TextureRequest& request)
-        -> Result<rstd::sync::Arc<vulkan::TextureAllocation>, resource::ResourceError> {
+        -> Result<Arc<vulkan::TextureAllocation>, resource::ResourceError> {
         if (m_textures_backend.is_none()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -974,8 +968,8 @@ private:
     }
 
     auto PublishPrepared(resource::TextureUseHandle use, resource::TextureHandle handle,
-                         resource::TextureRequest                   request,
-                         rstd::sync::Arc<vulkan::TextureAllocation> allocation,
+                         resource::TextureRequest          request,
+                         Arc<vulkan::TextureAllocation>    allocation,
                          Option<vulkan::ImageUploadTicket> upload, PreparedResourceTable& table)
         -> Result<empty, resource::ResourceError> {
         auto physical = m_textures.ResolveCurrent(handle);
@@ -984,7 +978,7 @@ private:
             auto view                = allocation->View();
             auto ready               = resource::ReadyToken {};
             if (upload.is_none()) {
-                ready.value = view.slots.empty() ? u64(1) : u64(view.getActive().generation);
+                ready.value = view.slots.is_empty() ? u64(1) : u64(view.getActive().generation);
             }
             auto published = m_textures.Publish(handle, rstd::move(allocation), ready, upload);
             if (published.is_none()) {
@@ -1028,10 +1022,9 @@ private:
     }
 
     static auto InsertPrepared(resource::TextureUseHandle use, resource::TextureHandle handle,
-                               resource::TextureRequest                   request,
-                               rstd::sync::Arc<vulkan::TextureAllocation> allocation,
-                               u64 physical_generation, resource::ReadyToken ready,
-                               PreparedResourceTable& table)
+                               resource::TextureRequest       request,
+                               Arc<vulkan::TextureAllocation> allocation, u64 physical_generation,
+                               resource::ReadyToken ready, PreparedResourceTable& table)
         -> Result<empty, resource::ResourceError> {
         auto image = allocation->View();
         if (! table.Insert(PreparedTexture {

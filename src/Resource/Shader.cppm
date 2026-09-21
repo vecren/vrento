@@ -57,38 +57,36 @@ export namespace vrento::resource
 {
 
 struct ShaderArtifactStage {
-    ShaderType          stage { ShaderType::VERTEX };
-    String              entry_point;
-    rstd::vec::Vec<u32> code;
+    ShaderType stage { ShaderType::VERTEX };
+    String     entry_point;
+    ShaderCode code;
 
     auto clone() const -> ShaderArtifactStage {
-        auto cloned = rstd::vec::Vec<u32>::with_capacity(code.len());
-        for (auto word : code) cloned.push(u32(word));
         return ShaderArtifactStage {
             .stage       = stage,
             .entry_point = entry_point.clone(),
-            .code        = rstd::move(cloned),
+            .code        = code.clone(),
         };
     }
 };
 
 struct ShaderArtifactUniformMember {
-    String              name;
-    u32                 offset {};
-    usize               size {};
-    usize               count { usize(1) };
-    ShaderScalarKind    scalar_kind { ShaderScalarKind::Unknown };
-    u32                 scalar_width {};
-    u32                 vector_components { u32(1) };
-    u32                 matrix_rows {};
-    u32                 matrix_columns {};
-    u32                 matrix_stride {};
-    ShaderMatrixMajor   matrix_major { ShaderMatrixMajor::None };
-    u32                 array_stride {};
-    rstd::vec::Vec<u32> array_dimensions;
+    String            name;
+    u32               offset {};
+    usize             size {};
+    usize             count { usize(1) };
+    ShaderScalarKind  scalar_kind { ShaderScalarKind::Unknown };
+    u32               scalar_width {};
+    u32               vector_components { u32(1) };
+    u32               matrix_rows {};
+    u32               matrix_columns {};
+    u32               matrix_stride {};
+    ShaderMatrixMajor matrix_major { ShaderMatrixMajor::None };
+    u32               array_stride {};
+    Vec<u32>          array_dimensions;
 
     auto clone() const -> ShaderArtifactUniformMember {
-        auto dimensions = rstd::vec::Vec<u32>::with_capacity(array_dimensions.len());
+        auto dimensions = Vec<u32>::with_capacity(array_dimensions.len());
         for (auto dimension : array_dimensions) dimensions.push(u32(dimension));
         return ShaderArtifactUniformMember {
             .name              = name.clone(),
@@ -118,11 +116,11 @@ struct ShaderArtifactUniformBlock {
         Shared,
         Local,
     } scope { Scope::Local };
-    u64                                         identity {};
-    rstd::vec::Vec<ShaderArtifactUniformMember> members;
+    u64                              identity {};
+    Vec<ShaderArtifactUniformMember> members;
 
     auto clone() const -> ShaderArtifactUniformBlock {
-        auto cloned = rstd::vec::Vec<ShaderArtifactUniformMember>::with_capacity(members.len());
+        auto cloned = Vec<ShaderArtifactUniformMember>::with_capacity(members.len());
         for (const auto& member : members) cloned.push(member.clone());
         return ShaderArtifactUniformBlock {
             .name     = name.clone(),
@@ -157,14 +155,13 @@ struct ShaderArtifactDescriptorBinding {
 };
 
 struct ShaderArtifactDescriptorSet {
-    u32                                             set {};
-    bool                                            push_descriptor { false };
-    u64                                             identity {};
-    rstd::vec::Vec<ShaderArtifactDescriptorBinding> bindings;
+    u32                                  set {};
+    bool                                 push_descriptor { false };
+    u64                                  identity {};
+    Vec<ShaderArtifactDescriptorBinding> bindings;
 
     auto clone() const -> ShaderArtifactDescriptorSet {
-        auto cloned =
-            rstd::vec::Vec<ShaderArtifactDescriptorBinding>::with_capacity(bindings.len());
+        auto cloned = Vec<ShaderArtifactDescriptorBinding>::with_capacity(bindings.len());
         for (const auto& binding : bindings) cloned.push(binding.clone());
         return ShaderArtifactDescriptorSet {
             .set             = set,
@@ -190,30 +187,27 @@ struct ShaderArtifactVertexInput {
 };
 
 struct ShaderArtifact {
-    ShaderDefinitionId                  source;
-    u64                                 content_version { u64(1) };
-    ShaderMatrixConvention              matrix_convention { ShaderMatrixConvention::ColumnVector };
-    ShaderMatrixAbi                     matrix_abi { ShaderMatrixAbi::NativeSpirv };
-    rstd::vec::Vec<ShaderArtifactStage> stages;
-    rstd::vec::Vec<ShaderArtifactUniformBlock>      uniform_blocks;
-    rstd::vec::Vec<ShaderArtifactDescriptorBinding> descriptor_bindings;
-    rstd::vec::Vec<ShaderArtifactDescriptorSet>     descriptor_sets;
-    rstd::vec::Vec<ShaderArtifactVertexInput>       vertex_inputs;
+    ShaderDefinitionId                   source;
+    u64                                  content_version { u64(1) };
+    ShaderMatrixConvention               matrix_convention { ShaderMatrixConvention::ColumnVector };
+    ShaderMatrixAbi                      matrix_abi { ShaderMatrixAbi::NativeSpirv };
+    Vec<ShaderArtifactStage>             stages;
+    Vec<ShaderArtifactUniformBlock>      uniform_blocks;
+    Vec<ShaderArtifactDescriptorBinding> descriptor_bindings;
+    Vec<ShaderArtifactDescriptorSet>     descriptor_sets;
+    Vec<ShaderArtifactVertexInput>       vertex_inputs;
 
     auto clone() const -> ShaderArtifact {
-        auto cloned_stages = rstd::vec::Vec<ShaderArtifactStage>::with_capacity(stages.len());
+        auto cloned_stages = Vec<ShaderArtifactStage>::with_capacity(stages.len());
         for (const auto& stage : stages) cloned_stages.push(stage.clone());
-        auto cloned_blocks =
-            rstd::vec::Vec<ShaderArtifactUniformBlock>::with_capacity(uniform_blocks.len());
+        auto cloned_blocks = Vec<ShaderArtifactUniformBlock>::with_capacity(uniform_blocks.len());
         for (const auto& block : uniform_blocks) cloned_blocks.push(block.clone());
-        auto cloned_bindings = rstd::vec::Vec<ShaderArtifactDescriptorBinding>::with_capacity(
-            descriptor_bindings.len());
+        auto cloned_bindings =
+            Vec<ShaderArtifactDescriptorBinding>::with_capacity(descriptor_bindings.len());
         for (const auto& binding : descriptor_bindings) cloned_bindings.push(binding.clone());
-        auto cloned_sets =
-            rstd::vec::Vec<ShaderArtifactDescriptorSet>::with_capacity(descriptor_sets.len());
+        auto cloned_sets = Vec<ShaderArtifactDescriptorSet>::with_capacity(descriptor_sets.len());
         for (const auto& set : descriptor_sets) cloned_sets.push(set.clone());
-        auto cloned_inputs =
-            rstd::vec::Vec<ShaderArtifactVertexInput>::with_capacity(vertex_inputs.len());
+        auto cloned_inputs = Vec<ShaderArtifactVertexInput>::with_capacity(vertex_inputs.len());
         for (const auto& input : vertex_inputs) cloned_inputs.push(input.clone());
         return ShaderArtifact {
             .source              = source,

@@ -87,6 +87,7 @@ public:
     UniformValue(const value_type& value) noexcept {
         fromSlice(slice<value_type>::from_raw_parts(rstd::addressof(value), usize(1)));
     }
+    UniformValue(slice<value_type> values) noexcept { fromSlice(values); }
     template<typename Range>
     UniformValue(const Range& range) noexcept {
         const auto len = [&]() -> usize {

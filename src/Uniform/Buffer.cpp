@@ -222,7 +222,7 @@ auto CompileUniformBufferLayout(const resource::ShaderArtifactUniformBlock& bloc
                     "uniform {} lies outside block {}", member.name.as_str(), block.name.as_str()),
             });
         }
-        auto dimensions = rstd::vec::Vec<u32>::with_capacity(member.array_dimensions.len());
+        auto dimensions = Vec<u32>::with_capacity(member.array_dimensions.len());
         for (auto dimension : member.array_dimensions) dimensions.push(u32(dimension));
         layout.slots.push(UniformSlot {
             .name              = member.name.clone(),
@@ -241,7 +241,7 @@ auto CompileUniformBufferLayout(const resource::ShaderArtifactUniformBlock& bloc
         });
     }
 
-    auto order = rstd::vec::Vec<usize>::with_capacity(layout.slots.len());
+    auto order = Vec<usize>::with_capacity(layout.slots.len());
     for (usize index {}; index < layout.slots.len(); ++index) {
         order.push(usize(index.to_primitive()));
     }

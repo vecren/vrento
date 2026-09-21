@@ -6,6 +6,8 @@ import vrento.vulkan;
 import :prepared;
 import :barrier;
 
+using rstd::collections::HashMap;
+
 export namespace vrento::resource_registry
 {
 
@@ -190,9 +192,8 @@ private:
         }
     }
 
-    using TextureMap = rstd::collections::HashMap<resource::TextureHandle, TrackedTexture>;
-    using TextureUseMap =
-        rstd::collections::HashMap<resource::TextureUseHandle, resource::TextureHandle>;
+    using TextureMap    = HashMap<resource::TextureHandle, TrackedTexture>;
+    using TextureUseMap = HashMap<resource::TextureUseHandle, resource::TextureHandle>;
 
     TextureMap    m_textures;
     TextureUseMap m_uses;

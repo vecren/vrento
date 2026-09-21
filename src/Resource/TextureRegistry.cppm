@@ -1,11 +1,13 @@
 module;
 
-#include <span>
-
 export module vrento.resource_registry:texture_registry;
 import rstd;
 import vrento.resource;
 import vrento.vulkan;
+
+using rstd::collections::HashMap;
+using rstd::collections::HashSet;
+using rstd::sync::Arc;
 
 using namespace rstd::prelude;
 
@@ -32,12 +34,12 @@ struct Texture {
 };
 
 struct TexturePhysical {
-    rstd::sync::Arc<vulkan::TextureAllocation> allocation;
-    u64                                        generation { 1 };
-    u64                                        source_generation { 0 };
-    u64                                        definition_version { 0 };
-    u64                                        content_version { 0 };
-    ReadyToken                                 ready;
+    Arc<vulkan::TextureAllocation> allocation;
+    u64                            generation { 1 };
+    u64                            source_generation { 0 };
+    u64                            definition_version { 0 };
+    u64                            content_version { 0 };
+    ReadyToken                     ready;
 
     auto clone() const -> TexturePhysical {
         return TexturePhysical {
@@ -57,8 +59,8 @@ struct PendingTextureUpload {
 };
 
 struct TextureRegistryIdentity {
-    TextureRequestKind   kind { TextureRequestKind::Imported };
-    rstd::string::String key;
+    TextureRequestKind kind { TextureRequestKind::Imported };
+    String             key;
 
     friend bool operator==(const TextureRegistryIdentity& lhs, const TextureRegistryIdentity& rhs) {
         return lhs.kind == rhs.kind && lhs.key == rhs.key.as_str();
@@ -167,11 +169,11 @@ private:
     }
 
 public:
-    auto Publish(resource::TextureHandle                    handle,
-                 rstd::sync::Arc<vulkan::TextureAllocation> allocation, ReadyToken ready,
-                 Option<vulkan::ImageUploadTicket> upload = None()) -> Option<u64> {
+    auto Publish(resource::TextureHandle handle, Arc<vulkan::TextureAllocation> allocation,
+                 ReadyToken ready, Option<vulkan::ImageUploadTicket> upload = None())
+        -> Option<u64> {
         auto image = allocation->View();
-        if (ResolveTexture(handle).is_none() || image.slots.empty()) return None();
+        if (ResolveTexture(handle).is_none() || image.slots.is_empty()) return None();
 
         auto logical = ResolveTexture(handle);
         if (logical.is_none()) return None();
@@ -210,8 +212,7 @@ public:
         return Some(physical_generation);
     }
 
-    void MarkUploadsSubmitted(std::span<const vulkan::ImageUploadTicket> tickets,
-                              Option<ReadyToken>                         ready) {
+    void MarkUploadsSubmitted(slice<vulkan::ImageUploadTicket> tickets, Option<ReadyToken> ready) {
         for (const auto& ticket : tickets) {
             auto pending = m_pending_uploads.remove(ticket.value);
             if (pending.is_none()) continue;
@@ -276,7 +277,7 @@ public:
     auto Find(TextureRequestKind kind, ref<str> key) const -> Option<resource::TextureHandle> {
         auto handle = m_handles.get(TextureRegistryIdentity {
             .kind = kind,
-            .key  = rstd::string::String::make(key),
+            .key  = String::make(key),
         });
         if (handle.is_none()) return None();
         auto value = **handle;
@@ -304,8 +305,7 @@ public:
     }
 
     void RetainActive(slice<resource::TextureHandle> handles) {
-        auto active =
-            rstd::collections::HashSet<resource::TextureHandle>::with_capacity(handles.len());
+        auto active = HashSet<resource::TextureHandle>::with_capacity(handles.len());
         for (usize index {}; index < handles.len(); ++index) {
             (void)active.insert(handles[index]);
         }
@@ -347,13 +347,13 @@ public:
 
 private:
     template<typename Value>
-    using HandleMap = rstd::collections::HashMap<resource::TextureHandle, Value>;
+    using HandleMap = HashMap<resource::TextureHandle, Value>;
 
     struct Snapshot {
-        HandleMap<Texture>                                                           textures;
-        HandleMap<TexturePhysical>                                                   resources;
-        rstd::collections::HashMap<TextureRegistryIdentity, resource::TextureHandle> handles;
-        u64 next_index { 0 };
+        HandleMap<Texture>                                        textures;
+        HandleMap<TexturePhysical>                                resources;
+        HashMap<TextureRegistryIdentity, resource::TextureHandle> handles;
+        u64                                                       next_index { 0 };
     };
 
     auto CloneSnapshot() const -> Snapshot {
@@ -380,13 +380,13 @@ private:
         return snapshot;
     }
 
-    u64                                                                          m_generation { 1 };
-    u64                                                                          m_next_index { 0 };
-    HandleMap<Texture>                                                           m_textures;
-    HandleMap<TexturePhysical>                                                   m_resources;
-    rstd::collections::HashMap<TextureRegistryIdentity, resource::TextureHandle> m_handles;
-    rstd::collections::HashMap<u64, Vec<PendingTextureUpload>>                   m_pending_uploads;
-    Option<Box<Snapshot>>                                                        m_transaction;
+    u64                                                       m_generation { 1 };
+    u64                                                       m_next_index { 0 };
+    HandleMap<Texture>                                        m_textures;
+    HandleMap<TexturePhysical>                                m_resources;
+    HashMap<TextureRegistryIdentity, resource::TextureHandle> m_handles;
+    HashMap<u64, Vec<PendingTextureUpload>>                   m_pending_uploads;
+    Option<Box<Snapshot>>                                     m_transaction;
 };
 
 } // namespace vrento::resource

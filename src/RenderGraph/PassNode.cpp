@@ -7,7 +7,7 @@ using namespace vrento::rg;
 
 namespace
 {
-auto DotEscape(rstd::ref<rstd::str> value) -> String {
+auto DotEscape(ref<str> value) -> String {
     auto out = String::make();
     for (auto value_byte : value) {
         switch (static_cast<char>(value_byte.to_primitive())) {
@@ -21,7 +21,7 @@ auto DotEscape(rstd::ref<rstd::str> value) -> String {
     return out;
 }
 
-auto PassTypeName(PassNode::Type type) -> rstd::ref<rstd::str> {
+auto PassTypeName(PassNode::Type type) -> ref<str> {
     switch (type) {
     case PassNode::Type::CustomShader: return "CustomShader"_str;
     case PassNode::Type::Copy: return "Copy"_str;

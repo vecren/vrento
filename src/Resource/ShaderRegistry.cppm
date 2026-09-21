@@ -2,6 +2,9 @@ export module vrento.resource_registry:shader_registry;
 import rstd;
 import vrento.resource;
 
+using rstd::collections::HashMap;
+using rstd::sync::Arc;
+
 export namespace vrento::resource_registry
 {
 
@@ -16,14 +19,14 @@ struct ShaderPhysical {
 };
 
 struct ShaderEntry {
-    resource::ShaderHandle          handle;
-    resource::ShaderRequest         request;
-    rstd::sync::Arc<ShaderPhysical> physical;
+    resource::ShaderHandle  handle;
+    resource::ShaderRequest request;
+    Arc<ShaderPhysical>     physical;
 };
 
 struct PreparedShader {
-    resource::ShaderHandle          resource;
-    rstd::sync::Arc<ShaderPhysical> physical;
+    resource::ShaderHandle resource;
+    Arc<ShaderPhysical>    physical;
 
     auto clone() const -> PreparedShader {
         return PreparedShader {
@@ -57,8 +60,7 @@ public:
         if (artifact.is_err()) return Err(rstd::move(artifact).unwrap_err_unchecked());
         auto handle      = NextHandle();
         auto request_key = request.clone();
-        auto physical =
-            rstd::sync::Arc<ShaderPhysical>::make(rstd::move(artifact).unwrap_unchecked(), u64(1));
+        auto physical = Arc<ShaderPhysical>::make(rstd::move(artifact).unwrap_unchecked(), u64(1));
         (void)m_entries.insert(handle,
                                ShaderEntry {
                                    .handle   = handle,
@@ -100,12 +102,12 @@ private:
         return { .index = m_next_index++, .generation = m_generation };
     }
 
-    using EntryMap = rstd::collections::HashMap<resource::ShaderHandle, ShaderEntry>;
+    using EntryMap = HashMap<resource::ShaderHandle, ShaderEntry>;
 
-    u64                                                                         m_generation { 1 };
-    u64                                                                         m_next_index { 0 };
-    EntryMap                                                                    m_entries;
-    rstd::collections::HashMap<resource::ShaderRequest, resource::ShaderHandle> m_requests;
+    u64                                                      m_generation { 1 };
+    u64                                                      m_next_index { 0 };
+    EntryMap                                                 m_entries;
+    HashMap<resource::ShaderRequest, resource::ShaderHandle> m_requests;
 };
 
 } // namespace vrento::resource_registry

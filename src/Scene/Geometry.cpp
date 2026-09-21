@@ -2,15 +2,16 @@ module;
 #include <rstd/macro.hpp>
 module vrento.geometry;
 import rstd;
-import rstd.cppstd;
 using namespace rstd::prelude;
+using rstd::sync::atomic::Atomic;
+using rstd::sync::atomic::Ordering;
 namespace vrento
 {
 namespace
 {
 u64 next_storage_generation() {
-    static rstd::sync::atomic::Atomic<u64> next { u64(1) };
-    auto value = next.fetch_add(u64(1), rstd::sync::atomic::Ordering::Relaxed);
+    static Atomic<u64> next { u64(1) };
+    auto               value = next.fetch_add(u64(1), Ordering::Relaxed);
     rstd_assert(value != u64());
     return value;
 }
@@ -18,11 +19,10 @@ u64 next_storage_generation() {
 
 auto VertexArray::BufferView() const -> GeometryBufferView {
     return {
-        .bytes =
-            slice<u8>::from_raw_parts(reinterpret_cast<const rstd::byte*>(Data()), DataSizeOf()),
-        .capacity           = CapacitySizeOf(),
-        .stride             = OneSizeOf(),
-        .count              = VertexCount(),
+        .bytes    = slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(Data()), DataSizeOf()),
+        .capacity = CapacitySizeOf(),
+        .stride   = OneSizeOf(),
+        .count    = VertexCount(),
         .data_generation    = m_generation,
         .storage_generation = m_storage_generation,
     };
@@ -30,32 +30,31 @@ auto VertexArray::BufferView() const -> GeometryBufferView {
 
 auto IndexArray::BufferView() const -> GeometryBufferView {
     return {
-        .bytes =
-            slice<u8>::from_raw_parts(reinterpret_cast<const rstd::byte*>(Data()), DataSizeOf()),
-        .capacity           = CapacitySizeof(),
-        .stride             = Unit_Byte_Size,
-        .count              = RenderDataCount(),
+        .bytes    = slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(Data()), DataSizeOf()),
+        .capacity = CapacitySizeof(),
+        .stride   = Unit_Byte_Size,
+        .count    = RenderDataCount(),
         .data_generation    = m_generation,
         .storage_generation = m_storage_generation,
     };
 }
 
-std::size_t VertexArray::TypeCount(VertexType t) {
+usize VertexArray::TypeCount(VertexType t) {
     switch (t) {
     case VertexType::FLOAT1:
-    case VertexType::UINT1: return 1;
+    case VertexType::UINT1: return usize(1);
     case VertexType::FLOAT2:
-    case VertexType::UINT2: return 2;
+    case VertexType::UINT2: return usize(2);
     case VertexType::FLOAT3:
-    case VertexType::UINT3: return 3;
+    case VertexType::UINT3: return usize(3);
     case VertexType::FLOAT4:
-    case VertexType::UINT4: return 4;
+    case VertexType::UINT4: return usize(4);
     }
-    return 1;
+    return usize(1);
 }
 
-std::size_t VertexArray::RealAttributeSize(const VertexArray::VertexAttribute& attr) {
-    return attr.padding ? 4 : TypeCount(attr.type);
+usize VertexArray::RealAttributeSize(const VertexArray::VertexAttribute& attr) {
+    return attr.padding ? usize(4) : TypeCount(attr.type);
 }
 
 auto VertexWriter::AppendZeroedVertex() noexcept -> Option<mut_ref<float[]>> {
@@ -82,10 +81,10 @@ auto VertexArray::FinishVertexRewrite(const VertexWriter& writer) noexcept -> Ve
     };
 }
 
-VertexArray::VertexArray(const std::vector<VertexAttribute>& attrs, const usize count)
-    : m_attributes(attrs), m_storage_generation(next_storage_generation()) {
+VertexArray::VertexArray(Vec<VertexAttribute> attrs, const usize count)
+    : m_attributes(rstd::move(attrs)), m_storage_generation(next_storage_generation()) {
     for (const auto& el : m_attributes) {
-        m_oneSize += usize(VertexArray::RealAttributeSize(el));
+        m_oneSize += VertexArray::RealAttributeSize(el);
     }
     auto capacity = m_oneSize * count;
     m_data        = Vec<float>::with_capacity(capacity);
@@ -122,12 +121,12 @@ VertexArray& VertexArray::operator=(VertexArray&& other) noexcept {
 
 bool VertexArray::AddVertex(const float* data) {
     if (data == nullptr || m_oneSize == usize() || m_oneSize > m_data.len() - m_size) return false;
-    std::size_t pos   = 0;
-    std::size_t mpos  = 0;
-    float*      mData = m_data.begin() + m_size.to_primitive();
+    usize pos {};
+    usize mpos = m_size;
     for (const auto& el : m_attributes) {
         auto typeSize = VertexArray::TypeCount(el.type);
-        std::copy(data + pos, data + pos + typeSize, mData + mpos);
+        for (usize component {}; component < typeSize; ++component)
+            m_data[mpos + component] = data[(pos + component).to_primitive()];
         pos += typeSize;
         mpos += VertexArray::RealAttributeSize(el);
     }
@@ -136,20 +135,19 @@ bool VertexArray::AddVertex(const float* data) {
     return true;
 }
 
-bool VertexArray::SetVertex(std::string_view name, slice<float> data) noexcept {
-    std::size_t offset = 0;
+bool VertexArray::SetVertex(ref<str> name, slice<float> data) noexcept {
+    usize offset {};
     for (const auto& el : m_attributes) {
-        if (el.name == name) {
-            std::size_t typeSize = VertexArray::TypeCount(el.type);
-            if (data.len() % usize(typeSize) != usize()) return false;
-            std::size_t count = data.len().to_primitive() / typeSize;
-            if (! TrySetSize(usize(count) * m_oneSize)) return false;
+        if (el.name.as_str() == name) {
+            const auto typeSize = VertexArray::TypeCount(el.type);
+            if (data.len() % typeSize != usize()) return false;
+            const auto count = data.len() / typeSize;
+            if (! TrySetSize(count * m_oneSize)) return false;
 
-            for (std::size_t i = 0; i < data.len().to_primitive(); i += typeSize) {
+            for (usize i {}; i < data.len(); i += typeSize) {
                 auto num = i / typeSize;
-                for (std::size_t component = 0; component < typeSize; ++component) {
-                    m_data[usize(offset + num * m_oneSize.to_primitive() + component)] =
-                        data[usize(i + component)];
+                for (usize component {}; component < typeSize; ++component) {
+                    m_data[offset + num * m_oneSize + component] = data[i + component];
                 }
             }
             BumpDataGeneration();
@@ -189,27 +187,26 @@ bool VertexArray::TrySetSize(usize new_size) noexcept {
     return true;
 }
 
-std::map<std::string, VertexArray::VertexAttributeOffset, std::less<>>
-VertexArray::GetAttrOffsetMap() const {
-    std::map<std::string, VertexArray::VertexAttributeOffset, std::less<>> result;
-    usize                                                                  offset {};
+auto VertexArray::AttributeOffset(ref<str> name) const -> Option<usize> {
+    Option<usize> result;
+    usize         offset {};
     for (const auto& attr : m_attributes) {
-        result[attr.name] = (VertexAttributeOffset { .attr = attr, .offset = offset });
-        offset += usize(VertexArray::RealAttributeSize(attr) * sizeof(float));
+        if (attr.name.as_str() == name) result = Some(offset);
+        offset += VertexArray::RealAttributeSize(attr) * usize(sizeof(float));
     }
     return result;
 }
 
 IndexArray::IndexArray(usize index_count)
-    : m_data(Vec<rstd::uint32_t>::with_capacity(index_count)),
+    : m_data(Vec<uint32_t>::with_capacity(index_count)),
       m_storage_generation(next_storage_generation()) {
     for (usize i {}; i < index_count; ++i) m_data.push(0);
 }
-IndexArray::IndexArray(slice<rstd::uint32_t> data)
-    : m_data(Vec<rstd::uint32_t>::with_capacity(data.len())),
+IndexArray::IndexArray(slice<uint32_t> data)
+    : m_data(Vec<uint32_t>::with_capacity(data.len())),
       m_size(data.len()),
       m_storage_generation(next_storage_generation()) {
-    for (rstd::uint32_t value : data) m_data.push(rstd::move(value));
+    for (uint32_t value : data) m_data.push(rstd::move(value));
 }
 
 IndexArray::IndexArray(IndexArray&& other) noexcept

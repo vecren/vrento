@@ -2,8 +2,6 @@ module;
 
 module vrento.vulkan;
 
-import rstd.cppstd;
-
 namespace vrento
 {
 namespace vulkan
@@ -12,10 +10,10 @@ namespace vulkan
 AllocatedBufferParameters::AllocatedBufferParameters()  = default;
 AllocatedBufferParameters::~AllocatedBufferParameters() = default;
 AllocatedBufferParameters::AllocatedBufferParameters(AllocatedBufferParameters&& o) noexcept
-    : handle(std::move(o.handle)), req_size(o.req_size) {}
+    : handle(rstd::move(o.handle)), req_size(o.req_size) {}
 AllocatedBufferParameters&
 AllocatedBufferParameters::operator=(AllocatedBufferParameters&& o) noexcept {
-    handle   = std::move(o.handle);
+    handle   = rstd::move(o.handle);
     req_size = o.req_size;
     return *this;
 }
@@ -23,9 +21,9 @@ AllocatedBufferParameters::operator=(AllocatedBufferParameters&& o) noexcept {
 AllocatedImageParameters::AllocatedImageParameters()  = default;
 AllocatedImageParameters::~AllocatedImageParameters() = default;
 AllocatedImageParameters::AllocatedImageParameters(AllocatedImageParameters&& o) noexcept
-    : handle(std::move(o.handle)),
-      view(std::move(o.view)),
-      sampler(std::move(o.sampler)),
+    : handle(rstd::move(o.handle)),
+      view(rstd::move(o.view)),
+      sampler(rstd::move(o.sampler)),
       extent(o.extent),
       mipmap_level(o.mipmap_level),
       generation(o.generation) {}
@@ -34,9 +32,9 @@ AllocatedImageParameters::operator=(AllocatedImageParameters&& o) noexcept {
     if (this == &o) return *this;
     view.reset();
     sampler.reset();
-    handle       = std::move(o.handle);
-    view         = std::move(o.view);
-    sampler      = std::move(o.sampler);
+    handle       = rstd::move(o.handle);
+    view         = rstd::move(o.view);
+    sampler      = rstd::move(o.sampler);
     extent       = o.extent;
     mipmap_level = o.mipmap_level;
     generation   = o.generation;
@@ -46,29 +44,29 @@ AllocatedImageParameters::operator=(AllocatedImageParameters&& o) noexcept {
 ExImageParameters::ExImageParameters()  = default;
 ExImageParameters::~ExImageParameters() = default;
 ExImageParameters::ExImageParameters(ExImageParameters&& o) noexcept
-    : mem(std::move(o.mem)),
+    : mem(rstd::move(o.mem)),
       mem_reqs(o.mem_reqs),
-      handle(std::move(o.handle)),
-      view(std::move(o.view)),
-      sampler(std::move(o.sampler)),
+      handle(rstd::move(o.handle)),
+      view(rstd::move(o.view)),
+      sampler(rstd::move(o.sampler)),
       extent(o.extent),
       mipmap_level(o.mipmap_level),
       generation(o.generation),
-      fd(std::exchange(o.fd, 0)),
+      fd(rstd::exchange(o.fd, 0)),
       drm_fourcc(o.drm_fourcc),
       drm_modifier(o.drm_modifier),
       plane0_offset(o.plane0_offset),
       plane0_stride(o.plane0_stride) {}
 ExImageParameters& ExImageParameters::operator=(ExImageParameters&& o) noexcept {
-    mem           = std::move(o.mem);
+    mem           = rstd::move(o.mem);
     mem_reqs      = o.mem_reqs;
-    handle        = std::move(o.handle);
-    view          = std::move(o.view);
-    sampler       = std::move(o.sampler);
+    handle        = rstd::move(o.handle);
+    view          = rstd::move(o.view);
+    sampler       = rstd::move(o.sampler);
     extent        = o.extent;
     mipmap_level  = o.mipmap_level;
     generation    = o.generation;
-    fd            = std::exchange(o.fd, 0);
+    fd            = rstd::exchange(o.fd, 0);
     drm_fourcc    = o.drm_fourcc;
     drm_modifier  = o.drm_modifier;
     plane0_offset = o.plane0_offset;
@@ -78,17 +76,17 @@ ExImageParameters& ExImageParameters::operator=(ExImageParameters&& o) noexcept 
 
 ImageSlots::ImageSlots()  = default;
 ImageSlots::~ImageSlots() = default;
-ImageSlots::ImageSlots(ImageSlots&& o) noexcept: slots(std::move(o.slots)) {}
+ImageSlots::ImageSlots(ImageSlots&& o) noexcept: slots(rstd::move(o.slots)) {}
 ImageSlots& ImageSlots::operator=(ImageSlots&& o) noexcept {
-    slots = std::move(o.slots);
+    slots = rstd::move(o.slots);
     return *this;
 }
 
 ImageSlotsRef::ImageSlotsRef()  = default;
 ImageSlotsRef::~ImageSlotsRef() = default;
 ImageSlotsRef::ImageSlotsRef(const ImageSlots& o) {
-    slots.reserve(o.slots.size());
-    for (const auto& image : o.slots) slots.push_back(ToImageParameters(image));
+    slots.reserve(o.slots.len());
+    for (const auto& image : o.slots) slots.push(ToImageParameters(image));
 }
 
 } // namespace vulkan

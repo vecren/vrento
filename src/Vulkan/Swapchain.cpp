@@ -7,15 +7,14 @@ module vrento.vulkan;
 
 import rstd;
 import rstd.log;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
 using namespace vrento::vulkan;
 
 struct SwapChainSupportDetails {
-    VkSurfaceCapabilitiesKHR           capabilities;
-    rstd::vec::Vec<VkSurfaceFormatKHR> formats;
-    rstd::vec::Vec<VkPresentModeKHR>   presentModes;
+    VkSurfaceCapabilitiesKHR capabilities;
+    Vec<VkSurfaceFormatKHR>  formats;
+    Vec<VkPresentModeKHR>    presentModes;
 };
 
 namespace
@@ -88,7 +87,7 @@ const vvk::SwapchainKHR& Swapchain::handle() const { return m_handle; }
 VkFormat                 Swapchain::format() const { return m_format.format; }
 VkExtent2D               Swapchain::extent() const { return m_extent; }
 
-std::span<const ImageParameters> Swapchain::images() const { return m_images; }
+slice<ImageParameters> Swapchain::images() const { return m_images.as_slice(); }
 
 VkPresentModeKHR Swapchain::presentMode() const { return m_present_mode; }
 
@@ -132,20 +131,21 @@ bool Swapchain::Create(Device& device, VkSurfaceKHR surface, VkExtent2D extent, 
 
     VVK_CHECK_BOOL_RE(device.device().CreateSwapchainKHR(sci, swap.m_handle));
     {
-        rstd::vec::Vec<VkImage> images;
+        Vec<VkImage> images;
         VVK_CHECK_BOOL_RE(swap.m_handle.GetImages(images));
-        std::transform(
-            images.begin(), images.end(), std::back_inserter(swap.m_images), [&](auto image) {
-                ImageParameters image_paras {};
-                image_paras.handle = image;
-                image_paras.extent = { swap.m_extent.width, swap.m_extent.height, 1 };
-                if (auto opt = CreateSwapImageView(device.device(), swap.m_format.format, image);
-                    opt.is_some()) {
-                    swap.m_imageviews.emplace_back(rstd::move(opt).unwrap());
-                    image_paras.view = *swap.m_imageviews.back();
-                }
-                return image_paras;
-            });
+        swap.m_images.reserve(images.len());
+        swap.m_imageviews.reserve(images.len());
+        for (auto image : images) {
+            ImageParameters image_paras {};
+            image_paras.handle = image;
+            image_paras.extent = { swap.m_extent.width, swap.m_extent.height, 1 };
+            if (auto view = CreateSwapImageView(device.device(), swap.m_format.format, image);
+                view.is_some()) {
+                image_paras.view = **view;
+                swap.m_imageviews.push(rstd::move(*view));
+            }
+            swap.m_images.push(rstd::move(image_paras));
+        }
     }
     return true;
 }

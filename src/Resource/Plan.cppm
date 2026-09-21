@@ -54,10 +54,10 @@ struct CompletionToken {
 };
 
 struct ResourcePlan {
-    u64                              generation { 0 };
-    rstd::vec::Vec<TexturePlanEntry> textures;
-    rstd::vec::Vec<BufferPlanEntry>  buffers;
-    rstd::vec::Vec<ShaderPlanEntry>  shaders;
+    u64                   generation { 0 };
+    Vec<TexturePlanEntry> textures;
+    Vec<BufferPlanEntry>  buffers;
+    Vec<ShaderPlanEntry>  shaders;
 
     auto DeclareTexture(TextureRequest request, ResourceAccess access) -> TextureUseHandle {
         if (generation == u64()) return {};

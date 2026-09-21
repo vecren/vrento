@@ -9,9 +9,9 @@ module vrento.vulkan;
 import vrento.shader_types;
 import rstd;
 import rstd.log;
-import rstd.cppstd;
 
 using namespace rstd::prelude;
+using rstd::ffi::CString;
 using namespace vrento::vulkan;
 
 namespace
@@ -27,12 +27,13 @@ inline VkShaderStageFlagBits ToVkType(vrento::ShaderType stage) {
     }
 }
 
-inline Option<vvk::ShaderModule> CreateShaderModule(const vvk::Device& device, ShaderSpv& spv) {
+inline Option<vvk::ShaderModule> CreateShaderModule(const vvk::Device& device,
+                                                    const ShaderSpv&   spv) {
     auto&                    data = spv.spirv;
     VkShaderModuleCreateInfo ci {
         .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .pNext    = nullptr,
-        .codeSize = data.size() * sizeof(decltype(data.back())),
+        .codeSize = data.len().to_primitive() * sizeof(rstd::uint32_t),
         .pCode    = data.data(),
     };
     vvk::ShaderModule sm;
@@ -79,7 +80,7 @@ void GraphicsPipeline::toDefault() {
         .lineWidth        = 1.0f,
     };
     m_color_attachments.clear();
-    m_color_attachments.push_back(VkPipelineColorBlendAttachmentState {
+    m_color_attachments.push(VkPipelineColorBlendAttachmentState {
         .blendEnable    = false,
         .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT });
@@ -88,10 +89,12 @@ void GraphicsPipeline::toDefault() {
         .pNext           = nullptr,
         .logicOpEnable   = false,
         .logicOp         = VK_LOGIC_OP_COPY,
-        .attachmentCount = static_cast<rstd::uint32_t>(m_color_attachments.size()),
+        .attachmentCount = static_cast<rstd::uint32_t>(m_color_attachments.len().to_primitive()),
         .pAttachments    = m_color_attachments.data(),
     };
-    m_dynamic_states = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    m_dynamic_states = Vec<VkDynamicState>::from(
+        rstd::array<VkDynamicState, 2> { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
+            .as_slice());
 
     m_input_assembly = VkPipelineInputAssemblyStateCreateInfo {
         .sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -102,16 +105,16 @@ void GraphicsPipeline::toDefault() {
 }
 
 const ShaderSpv* GraphicsPipeline::getShaderSpv(VkShaderStageFlagBits stage) const {
-    if (m_stage_spv_map.contains(stage)) {
-        return m_stage_spv_map.at(stage).as_ptr().as_raw_ptr();
+    if (auto spv = m_stage_spv_map.get(u32(stage)); spv.is_some()) {
+        return (**spv).as_ptr().as_raw_ptr();
     }
     return nullptr;
 }
 
 GraphicsPipeline&
-GraphicsPipeline::setColorBlendStates(std::span<const VkPipelineColorBlendAttachmentState> stats) {
-    m_color_attachments     = { stats.begin(), stats.end() };
-    m_color.attachmentCount = static_cast<rstd::uint32_t>(m_color_attachments.size());
+GraphicsPipeline::setColorBlendStates(slice<VkPipelineColorBlendAttachmentState> stats) {
+    m_color_attachments     = Vec<VkPipelineColorBlendAttachmentState>::from(stats);
+    m_color.attachmentCount = static_cast<rstd::uint32_t>(m_color_attachments.len().to_primitive());
     m_color.pAttachments    = m_color_attachments.data();
     return *this;
 }
@@ -119,7 +122,9 @@ GraphicsPipeline::setColorBlendStates(std::span<const VkPipelineColorBlendAttach
 GraphicsPipeline& GraphicsPipeline::setColorBlendOptions(VkPipelineColorBlendStateCreateFlags flags,
                                                          const rstd::array<float, 4>& constants) {
     m_color.flags = flags;
-    std::copy(constants.begin(), constants.end(), std::begin(m_color.blendConstants));
+    rstd::slice_::copy_from_slice(
+        rstd::mut_ref<float[]>::from_raw_parts(m_color.blendConstants, usize(4)),
+        constants.as_slice());
     return *this;
 }
 
@@ -137,24 +142,24 @@ GraphicsPipeline& GraphicsPipeline::setCreateInfoOptions(VkPipelineCreateFlags f
 }
 
 GraphicsPipeline& GraphicsPipeline::setRenderPass(vvk::RenderPass pass) {
-    m_pass = std::move(pass);
+    m_pass = rstd::move(pass);
     return *this;
 }
 
 GraphicsPipeline& GraphicsPipeline::addStage(Uni_ShaderSpv&& spv) {
     VkShaderStageFlagBits stage = ::ToVkType(spv->stage);
-    m_stage_spv_map.insert_or_assign(stage, rstd::move(spv));
+    (void)m_stage_spv_map.insert(u32(stage), rstd::move(spv));
     return *this;
 }
 
-GraphicsPipeline& GraphicsPipeline::addInputAttributeDescription(
-    std::span<const VkVertexInputAttributeDescription> attrs) {
-    for (auto& a : attrs) m_input_attr_descriptions.push_back(a);
+GraphicsPipeline&
+GraphicsPipeline::addInputAttributeDescription(slice<VkVertexInputAttributeDescription> attrs) {
+    m_input_attr_descriptions.extend_from_slice(attrs);
     return *this;
 }
-GraphicsPipeline& GraphicsPipeline::addInputBindingDescription(
-    std::span<const VkVertexInputBindingDescription> binds) {
-    for (auto& b : binds) m_input_bind_descriptions.push_back(b);
+GraphicsPipeline&
+GraphicsPipeline::addInputBindingDescription(slice<VkVertexInputBindingDescription> binds) {
+    m_input_bind_descriptions.extend_from_slice(binds);
     return *this;
 }
 GraphicsPipeline& GraphicsPipeline::setTopology(VkPrimitiveTopology topology) {
@@ -174,8 +179,8 @@ GraphicsPipeline& GraphicsPipeline::setViewportScissorCount(rstd::uint32_t viewp
     return *this;
 }
 
-GraphicsPipeline& GraphicsPipeline::setDynamicStates(std::span<const VkDynamicState> states) {
-    m_dynamic_states = { states.begin(), states.end() };
+GraphicsPipeline& GraphicsPipeline::setDynamicStates(slice<VkDynamicState> states) {
+    m_dynamic_states = Vec<VkDynamicState>::from(states);
     return *this;
 }
 
@@ -189,37 +194,41 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
     VkPipelineDynamicStateCreateInfo dynamic_info {
         .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
         .pNext             = nullptr,
-        .dynamicStateCount = static_cast<rstd::uint32_t>(m_dynamic_states.size()),
+        .dynamicStateCount = static_cast<rstd::uint32_t>(m_dynamic_states.len().to_primitive()),
         .pDynamicStates    = m_dynamic_states.data()
     };
     pipeline.layout = layout;
 
-    std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
-    std::vector<vvk::ShaderModule>               shader_modules;
-    for (auto& item : m_stage_spv_map) {
-        auto&                           spv = item.second;
+    auto entry_names = Vec<CString>::with_capacity(m_stage_spv_map.len());
+    Vec<VkPipelineShaderStageCreateInfo> shaderStages;
+    Vec<vvk::ShaderModule>               shader_modules;
+    for (const auto& [stage, value] : m_stage_spv_map.iter()) {
+        const auto& spv   = *value;
+        auto        entry = CString::make(Vec<u8>::from(spv->entry_point.as_str().as_bytes()));
+        if (entry.is_err()) return false;
+        entry_names.push(rstd::move(entry).unwrap());
         VkPipelineShaderStageCreateInfo info {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = nullptr,
             .stage = ::ToVkType(spv->stage),
-            .pName = spv->entry_point.c_str()
+            .pName = entry_names[entry_names.len() - usize(1)].as_ptr()
         };
         if (auto opt = CreateShaderModule(device.handle(), *spv); opt.is_some()) {
-            shader_modules.emplace_back(rstd::move(opt).unwrap());
-            info.module = *shader_modules.back();
+            shader_modules.push(rstd::move(opt).unwrap());
+            info.module = *shader_modules[shader_modules.len() - usize(1)];
         }
 
-        shaderStages.push_back(info);
+        shaderStages.push(rstd::move(info));
     }
 
     VkPipelineVertexInputStateCreateInfo input {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .pNext = nullptr,
         .vertexBindingDescriptionCount =
-            static_cast<rstd::uint32_t>(m_input_bind_descriptions.size()),
+            static_cast<rstd::uint32_t>(m_input_bind_descriptions.len().to_primitive()),
         .pVertexBindingDescriptions = m_input_bind_descriptions.data(),
         .vertexAttributeDescriptionCount =
-            static_cast<rstd::uint32_t>(m_input_attr_descriptions.size()),
+            static_cast<rstd::uint32_t>(m_input_attr_descriptions.len().to_primitive()),
         .pVertexAttributeDescriptions = m_input_attr_descriptions.data()
     };
 
@@ -227,7 +236,7 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
         .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext               = nullptr,
         .flags               = m_create_flags,
-        .stageCount          = static_cast<rstd::uint32_t>(shaderStages.size()),
+        .stageCount          = static_cast<rstd::uint32_t>(shaderStages.len().to_primitive()),
         .pStages             = shaderStages.data(),
         .pVertexInputState   = &input,
         .pInputAssemblyState = &m_input_assembly,

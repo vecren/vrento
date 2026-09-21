@@ -22,6 +22,21 @@ struct Pass {
     Pass& operator=(const Pass&) = delete;
 };
 
+struct PassObject {
+    using Trait                  = PassObject;
+    static constexpr bool direct = false;
+
+    template<typename Self, typename = void>
+    struct Api {
+        using Trait = PassObject;
+        auto AsPass() -> Pass& { return rstd::trait_call<0>(this); }
+        auto AsConstPass() const -> const Pass& { return rstd::trait_call<1>(this); }
+    };
+
+    template<typename T>
+    using Funcs = rstd::TraitFuncs<&T::AsPass, &T::AsConstPass>;
+};
+
 struct VirtualPass : Pass {
     struct Desc {};
 
@@ -33,6 +48,13 @@ struct VirtualPass : Pass {
 
 export namespace rstd
 {
+
+template<typename T>
+    requires requires(T& value) { static_cast<vrento::rg::Pass&>(value); }
+struct Impl<vrento::rg::PassObject, T> : ImplBase<T> {
+    auto AsPass() -> vrento::rg::Pass& { return this->self(); }
+    auto AsConstPass() const -> const vrento::rg::Pass& { return this->self(); }
+};
 
 template<>
 struct Impl<hash::Hash, vrento::rg::PassHandle> : ImplBase<vrento::rg::PassHandle> {

@@ -159,6 +159,13 @@ static void ValuesAndLayout() {
     for (usize index {}; index < values.len(); ++index) values[index] = float(index.to_primitive());
     UniformValue first(values);
     UniformValue copy(first);
+    Vec<float>   source;
+    source.push(2.0f);
+    source.push(3.0f);
+    UniformValue from_slice(source.as_slice());
+    source.clear();
+    rstd_assert(from_slice.size() == usize(2));
+    rstd_assert(from_slice[usize(1)] == 3.0f);
     first[usize(17)] = -1.0f;
     rstd_assert(copy[usize(17)] == 17.0f);
 

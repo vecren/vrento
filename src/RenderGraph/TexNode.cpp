@@ -7,7 +7,7 @@ using namespace vrento::rg;
 
 namespace
 {
-auto DotEscape(rstd::ref<rstd::str> value) -> String {
+auto DotEscape(ref<str> value) -> String {
     auto out = String::make();
     for (auto value_byte : value) {
         switch (static_cast<char>(value_byte.to_primitive())) {
@@ -21,7 +21,7 @@ auto DotEscape(rstd::ref<rstd::str> value) -> String {
     return out;
 }
 
-auto TextureTypeName(TexNode::TexType type) -> rstd::ref<rstd::str> {
+auto TextureTypeName(TexNode::TexType type) -> ref<str> {
     switch (type) {
     case TexNode::TexType::Imported: return "Imported"_str;
     case TexNode::TexType::Temp: return "Temp"_str;

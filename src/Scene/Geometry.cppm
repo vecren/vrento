@@ -1,7 +1,6 @@
 export module vrento.geometry;
 export import vrento.vertex_types;
 import rstd;
-import rstd.cppstd;
 using namespace rstd::prelude;
 export namespace vrento
 {
@@ -22,18 +21,18 @@ struct GeometryView {
 };
 
 class IndexArray {
-    constexpr static usize Unit_Byte_Size { sizeof(rstd::uint32_t) };
+    constexpr static usize Unit_Byte_Size { sizeof(uint32_t) };
 
 public:
     IndexArray(const IndexArray&)                    = delete;
     auto operator=(const IndexArray&) -> IndexArray& = delete;
     IndexArray(usize indexCount);
-    IndexArray(slice<rstd::uint32_t> data);
+    IndexArray(slice<uint32_t> data);
 
     IndexArray(IndexArray&&) noexcept;
     ~IndexArray() = default;
 
-    void Assign(usize index, slice<rstd::uint32_t> data) {
+    void Assign(usize index, slice<uint32_t> data) {
         if (index > m_data.len() || data.len() > m_data.len() - index) return;
         if (! IncreaseCheckSet((index + data.len()) * Unit_Byte_Size)) return;
         for (usize source_index {}; source_index < data.len(); ++source_index) {
@@ -42,9 +41,9 @@ public:
         BumpDataGeneration();
     }
 
-    const rstd::uint32_t* Data() const { return m_data.is_empty() ? nullptr : m_data.begin(); }
-    usize                 DataCount() const { return m_size; }
-    usize                 DataSizeOf() const { return m_size * Unit_Byte_Size; }
+    const uint32_t* Data() const { return m_data.is_empty() ? nullptr : m_data.begin(); }
+    usize           DataCount() const { return m_size; }
+    usize           DataSizeOf() const { return m_size * Unit_Byte_Size; }
 
     usize RenderDataCount() const noexcept {
         return m_render_size > m_size ? m_size : m_render_size;
@@ -63,8 +62,8 @@ private:
     bool IncreaseCheckSet(usize size);
     void BumpDataGeneration() noexcept { ++m_generation; }
 
-    Vec<rstd::uint32_t> m_data;
-    usize               m_size { 0 };
+    Vec<uint32_t> m_data;
+    usize         m_size { 0 };
 
     usize m_render_size { usize::MAX };
 
@@ -108,25 +107,28 @@ private:
 class VertexArray {
 public:
     struct VertexAttribute {
-        std::string name;
-        VertexType  type;
-        bool        padding { true };
-    };
-    struct VertexAttributeOffset {
-        VertexAttribute attr;
-        usize           offset;
+        String     name;
+        VertexType type;
+        bool       padding { true };
+
+        auto clone() const -> VertexAttribute { return { name.clone(), type, padding }; }
+        void clone_from(const VertexAttribute& source) { *this = source.clone(); }
     };
 
     VertexArray(const VertexArray&)                    = delete;
     auto operator=(const VertexArray&) -> VertexArray& = delete;
-    VertexArray(const std::vector<VertexAttribute>& attrs, usize count);
+    VertexArray(Vec<VertexAttribute> attrs, usize count);
+    VertexArray(initializer_list<VertexAttribute> attrs, usize count)
+        : VertexArray(Vec<VertexAttribute>::from(slice<VertexAttribute>::from_raw_parts(
+                          attrs.begin(), usize(attrs.size()))),
+                      count) {}
     ~VertexArray() = default;
 
     VertexArray(VertexArray&&) noexcept;
     VertexArray& operator=(VertexArray&&) noexcept;
 
     bool AddVertex(const float*);
-    bool SetVertex(std::string_view name, slice<float> data) noexcept;
+    bool SetVertex(ref<str> name, slice<float> data) noexcept;
     bool SetVertexs(usize index, slice<float> data) noexcept;
 
     template<typename Fill>
@@ -156,21 +158,21 @@ public:
     u64          DataGeneration() const { return m_generation; }
     auto         BufferView() const -> GeometryBufferView;
 
-    const auto& Attributes() const { return m_attributes; }
-    std::map<std::string, VertexAttributeOffset, std::less<>> GetAttrOffsetMap() const;
+    auto Attributes() const -> slice<VertexAttribute> { return m_attributes.as_slice(); }
+    auto AttributeOffset(ref<str> name) const -> Option<usize>;
 
     u32  ID() const { return m_id; }
     void SetID(u32 id) { m_id = id; }
 
-    static std::size_t TypeCount(VertexType);
-    static std::size_t RealAttributeSize(const VertexAttribute&);
+    static usize TypeCount(VertexType);
+    static usize RealAttributeSize(const VertexAttribute&);
 
 private:
     bool TrySetSize(usize) noexcept;
     auto FinishVertexRewrite(const VertexWriter&) noexcept -> VertexWriteResult;
     void BumpDataGeneration() noexcept { ++m_generation; }
 
-    std::vector<VertexAttribute> m_attributes;
+    Vec<VertexAttribute> m_attributes;
 
     Vec<float> m_data;
     usize      m_oneSize { 0 };

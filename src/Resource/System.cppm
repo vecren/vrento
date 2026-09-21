@@ -4,7 +4,6 @@ module;
 
 export module vrento.resource_registry:system;
 import rstd;
-import rstd.cppstd;
 import vrento.resource;
 import vrento.vulkan;
 
@@ -57,11 +56,11 @@ struct GraphicsResourcePreparer {
                 this, pipeline_use, render_pass_use, device, rstd::move(request));
         }
 
-        auto PrepareFramebuffer(resource::FramebufferUseHandle                 framebuffer_use,
-                                resource::RenderPassUseHandle                  render_pass_use,
-                                const vulkan::Device&                          device,
-                                std::vector<vulkan::FramebufferAttachmentDesc> attachments,
-                                VkExtent2D                                     extent)
+        auto PrepareFramebuffer(resource::FramebufferUseHandle         framebuffer_use,
+                                resource::RenderPassUseHandle          render_pass_use,
+                                const vulkan::Device&                  device,
+                                Vec<vulkan::FramebufferAttachmentDesc> attachments,
+                                VkExtent2D                             extent)
             -> Result<FramebufferPreparation, resource::ResourceError> {
             return rstd::trait_call<1>(
                 this, framebuffer_use, render_pass_use, device, rstd::move(attachments), extent);
@@ -283,7 +282,7 @@ public:
                                       m_registries.PipelineLayouts(),
                                       m_registries.PipelineCache(),
                                       m_registries.RenderPassCache());
-        auto                   result = system.CreateGraphicsPipeline(std::move(request));
+        auto                   result = system.CreateGraphicsPipeline(rstd::move(request));
         if (result.is_none()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
@@ -293,7 +292,7 @@ public:
         if (! m_prepared.Insert(PreparedRenderPass {
                 .use       = render_pass_use,
                 .resource  = result->render_pass,
-                .cache_key = result->render_pass_key,
+                .cache_key = result->render_pass_key.clone(),
                 .physical  = result->render_pass_physical.clone(),
             }) ||
             ! m_prepared.Insert(PreparedPipeline {
@@ -319,11 +318,10 @@ public:
         });
     }
 
-    auto PrepareFramebuffer(resource::FramebufferUseHandle                 framebuffer_use,
-                            resource::RenderPassUseHandle                  render_pass_use,
-                            const vulkan::Device&                          device,
-                            std::vector<vulkan::FramebufferAttachmentDesc> attachments,
-                            VkExtent2D                                     extent)
+    auto PrepareFramebuffer(resource::FramebufferUseHandle         framebuffer_use,
+                            resource::RenderPassUseHandle          render_pass_use,
+                            const vulkan::Device&                  device,
+                            Vec<vulkan::FramebufferAttachmentDesc> attachments, VkExtent2D extent)
         -> Result<FramebufferPreparation, resource::ResourceError> {
         auto render_pass = m_prepared.Resolve(render_pass_use);
         if (render_pass.is_none()) {
@@ -336,7 +334,7 @@ public:
             device, m_registries.FramebufferCache(), m_registries.FramebufferDiagnostics());
         auto result = system.CreateFramebuffer(vulkan::FramebufferResourceRequest {
             .render_pass     = **(**render_pass).physical,
-            .render_pass_key = (**render_pass).cache_key,
+            .render_pass_key = (**render_pass).cache_key.clone(),
             .attachments     = rstd::move(attachments),
             .extent          = extent,
         });
@@ -377,7 +375,7 @@ public:
         if (! m_prepared.Insert(PreparedRenderPass {
                 .use       = use,
                 .resource  = result->handle,
-                .cache_key = result->cache_key,
+                .cache_key = result->cache_key.clone(),
                 .physical  = result->render_pass.clone(),
             })) {
             return Err(resource::ResourceError {
@@ -491,25 +489,19 @@ public:
         auto buffer_tickets = Vec<vulkan::BufferUploadTicket>::make();
         if (buffer_lease.is_some()) {
             auto tickets = buffer_lease->Tickets();
-            buffer_tickets.extend_from_slice(tickets.data(), usize(tickets.size()));
+            buffer_tickets.extend_from_slice(tickets.as_raw_ptr(), tickets.len());
         }
         auto image_tickets = Vec<vulkan::ImageUploadTicket>::make();
         if (image_lease.is_some()) {
             auto tickets = image_lease->Tickets();
-            image_tickets.extend_from_slice(tickets.data(), usize(tickets.size()));
+            image_tickets.extend_from_slice(tickets.as_raw_ptr(), tickets.len());
         }
         if (! m_registries.Uploads().MarkSubmitted(
                 token, rstd::move(buffer_lease), rstd::move(image_lease))) {
             return false;
         }
-        m_registries.Buffers().MarkUploadsSubmitted(
-            std::span<const vulkan::BufferUploadTicket>(buffer_tickets.data(),
-                                                        buffer_tickets.len().to_primitive()),
-            Some(token));
-        m_registries.TextureEntries().MarkUploadsSubmitted(
-            std::span<const vulkan::ImageUploadTicket>(image_tickets.data(),
-                                                       image_tickets.len().to_primitive()),
-            Some(token));
+        m_registries.Buffers().MarkUploadsSubmitted(buffer_tickets.as_slice(), Some(token));
+        m_registries.TextureEntries().MarkUploadsSubmitted(image_tickets.as_slice(), Some(token));
         return true;
     }
     auto PendingUpload() -> Option<resource::ReadyToken> {
@@ -568,13 +560,13 @@ public:
 
     void PumpVideoTextures(double seconds) { m_registries.Textures().PumpVideoTextures(seconds); }
     void SetVideoDecodeOptions(vulkan::TextureCache::VideoDecodeOptions options) {
-        m_registries.Textures().SetVideoDecodeOptions(std::move(options));
+        m_registries.Textures().SetVideoDecodeOptions(rstd::move(options));
     }
-    bool UploadFontAtlasRegion(const std::string& key, const std::uint8_t* atlas,
-                               std::uint32_t atlas_width, std::uint32_t x, std::uint32_t y,
-                               std::uint32_t width, std::uint32_t height) {
-        auto handle = m_registries.TextureEntries().Find(resource::TextureRequestKind::Imported,
-                                                         rstd::cppstd::as_str(key).unwrap());
+    bool UploadFontAtlasRegion(ref<str> key, const rstd::uint8_t* atlas, rstd::uint32_t atlas_width,
+                               rstd::uint32_t x, rstd::uint32_t y, rstd::uint32_t width,
+                               rstd::uint32_t height) {
+        auto handle =
+            m_registries.TextureEntries().Find(resource::TextureRequestKind::Imported, key);
         if (handle.is_none()) return false;
         auto physical = m_registries.TextureEntries().ResolveCurrent(*handle);
         if (physical.is_none()) return false;
@@ -582,7 +574,7 @@ public:
             (**physical).allocation.deref(), atlas, atlas_width, x, y, width, height);
     }
     auto CreateLocalSwapchain(const vulkan::Device& device, unsigned width, unsigned height,
-                              VkImageTiling tiling) -> std::shared_ptr<vulkan::LocalExSwapchain> {
+                              VkImageTiling tiling) -> Option<ExSwapchainOwner> {
         return vulkan::CreateLocalExSwapchain(
             device, m_registries.Textures(), width, height, tiling);
     }
@@ -632,11 +624,11 @@ struct Impl<vrento::resource_registry::GraphicsResourcePreparer,
             pipeline_use, render_pass_use, device, rstd::move(request));
     }
 
-    auto PrepareFramebuffer(vrento::resource::FramebufferUseHandle                 framebuffer_use,
-                            vrento::resource::RenderPassUseHandle                  render_pass_use,
-                            const vrento::vulkan::Device&                          device,
-                            std::vector<vrento::vulkan::FramebufferAttachmentDesc> attachments,
-                            VkExtent2D                                             extent)
+    auto PrepareFramebuffer(vrento::resource::FramebufferUseHandle         framebuffer_use,
+                            vrento::resource::RenderPassUseHandle          render_pass_use,
+                            const vrento::vulkan::Device&                  device,
+                            Vec<vrento::vulkan::FramebufferAttachmentDesc> attachments,
+                            VkExtent2D                                     extent)
         -> Result<vrento::resource_registry::FramebufferPreparation,
                   vrento::resource::ResourceError> {
         return this->self().PrepareFramebuffer(

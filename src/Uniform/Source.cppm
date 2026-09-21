@@ -2,6 +2,9 @@ export module vrento.uniform_source;
 export import vrento.uniform_value;
 export import vrento.runtime;
 import rstd;
+
+using rstd::sync::Arc;
+
 using namespace rstd::prelude;
 using rstd::collections::HashMap;
 
@@ -260,7 +263,7 @@ struct UniformSourceRegistrar {
     using Funcs = TraitFuncs<&T::Register>;
 };
 
-using UniformSourceOwner = rstd::sync::Arc<Box<dyn<UniformSource>>>;
+using UniformSourceOwner = Arc<Box<dyn<UniformSource>>>;
 
 template<typename NodeId>
 class UniformRegistry {

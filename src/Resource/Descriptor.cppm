@@ -4,9 +4,11 @@ module;
 
 export module vrento.resource_registry:descriptor;
 import rstd;
-import rstd.cppstd;
 import vrento.resource;
 import vrento.vulkan;
+
+using rstd::collections::HashMap;
+using rstd::sync::Arc;
 
 export namespace vrento::resource_registry
 {
@@ -37,8 +39,8 @@ export namespace vrento::resource_registry
 {
 
 struct DescriptorSetSchema {
-    bool                                    push_descriptor { false };
-    rstd::vec::Vec<DescriptorBindingSchema> bindings;
+    bool                         push_descriptor { false };
+    Vec<DescriptorBindingSchema> bindings;
 
     auto clone() const -> DescriptorSetSchema {
         return DescriptorSetSchema {
@@ -112,8 +114,7 @@ public:
         auto normalized = rstd::move(schema).unwrap_unchecked();
         if (auto existing = m_handles.get(normalized); existing.is_some()) return Ok(**existing);
 
-        auto bindings =
-            rstd::vec::Vec<VkDescriptorSetLayoutBinding>::with_capacity(normalized.bindings.len());
+        auto bindings = Vec<VkDescriptorSetLayoutBinding>::with_capacity(normalized.bindings.len());
         for (const auto& binding : normalized.bindings) {
             bindings.push(VkDescriptorSetLayoutBinding {
                 .binding            = binding.binding,
@@ -173,7 +174,7 @@ public:
 
     static auto CanonicalSchema(const vulkan::DescriptorSetInfo& info)
         -> Result<DescriptorSetSchema, resource::ResourceError> {
-        auto bindings = rstd::vec::Vec<DescriptorBindingSchema>::with_capacity(info.bindings.len());
+        auto bindings = Vec<DescriptorBindingSchema>::with_capacity(info.bindings.len());
         for (const auto& binding : info.bindings) {
             if (binding.pImmutableSamplers != nullptr) {
                 return Err(resource::ResourceError {
@@ -210,10 +211,8 @@ public:
     }
 
 private:
-    using EntryMap =
-        rstd::collections::HashMap<resource::DescriptorLayoutHandle, DescriptorLayoutEntry>;
-    using IdentityMap =
-        rstd::collections::HashMap<DescriptorSetSchema, resource::DescriptorLayoutHandle>;
+    using EntryMap    = HashMap<resource::DescriptorLayoutHandle, DescriptorLayoutEntry>;
+    using IdentityMap = HashMap<DescriptorSetSchema, resource::DescriptorLayoutHandle>;
 
     u64         m_generation { 1 };
     u64         m_next_index { 0 };
@@ -369,7 +368,7 @@ struct DescriptorBindingRecordState {
 
 private:
     void InvalidateFrom(rstd::uint32_t set_index) {
-        auto retained = rstd::vec::Vec<BoundSet>::with_capacity(m_bound.len());
+        auto retained = Vec<BoundSet>::with_capacity(m_bound.len());
         for (const auto& bound : m_bound) {
             if (bound.set_index < set_index) {
                 retained.push(BoundSet {
@@ -382,10 +381,10 @@ private:
         m_bound = rstd::move(retained);
     }
 
-    rstd::vec::Vec<BoundSet>                         m_bound;
-    Option<resource::PipelineLayoutHandle>           m_pipeline;
-    rstd::vec::Vec<resource::DescriptorLayoutHandle> m_descriptor_layouts;
-    rstd::uint64_t                                   m_push_constant_identity {};
+    Vec<BoundSet>                          m_bound;
+    Option<resource::PipelineLayoutHandle> m_pipeline;
+    Vec<resource::DescriptorLayoutHandle>  m_descriptor_layouts;
+    rstd::uint64_t                         m_push_constant_identity {};
 };
 
 enum class DescriptorBindingBackend
@@ -401,13 +400,13 @@ enum class DescriptorBindingReuse
 };
 
 struct PreparedDescriptorBinding {
-    resource::DescriptorBindingHandle       handle;
-    resource::DescriptorLayoutHandle        layout;
-    rstd::uint32_t                          set_index { 0 };
-    DescriptorBindingBackend                backend { DescriptorBindingBackend::Push };
-    rstd::vec::Vec<DescriptorImageBinding>  images;
-    rstd::vec::Vec<DescriptorBufferBinding> buffers;
-    Option<vvk::DescriptorSetLease>         set;
+    resource::DescriptorBindingHandle handle;
+    resource::DescriptorLayoutHandle  layout;
+    rstd::uint32_t                    set_index { 0 };
+    DescriptorBindingBackend          backend { DescriptorBindingBackend::Push };
+    Vec<DescriptorImageBinding>       images;
+    Vec<DescriptorBufferBinding>      buffers;
+    Option<vvk::DescriptorSetLease>   set;
 
     auto clone() const -> PreparedDescriptorBinding {
         return PreparedDescriptorBinding {
@@ -440,7 +439,7 @@ struct PreparedDescriptorBinding {
         }
         if (! changed) return Ok(empty {});
 
-        auto updated = rstd::vec::Vec<DescriptorImageBinding>::from(next);
+        auto updated = Vec<DescriptorImageBinding>::from(next);
 
         if (backend == DescriptorBindingBackend::Set) {
             if (set.is_none() || ! set->valid()) {
@@ -537,12 +536,12 @@ class DescriptorSystem {
 public:
     auto PreparePush(rstd::uint32_t set_index, rstd::slice<DescriptorImageBinding> images,
                      rstd::slice<DescriptorBufferBinding> buffers) -> PreparedDescriptorBinding {
-        auto prepared_images = rstd::vec::Vec<DescriptorImageBinding>::from(images);
+        auto prepared_images = Vec<DescriptorImageBinding>::from(images);
         rstd::slice_::sort_unstable_by(prepared_images.as_mut_slice().as_mut_ref(),
                                        [](const auto& lhs, const auto& rhs) {
                                            return lhs.binding < rhs.binding;
                                        });
-        auto prepared_buffers = rstd::vec::Vec<DescriptorBufferBinding>::from(buffers);
+        auto prepared_buffers = Vec<DescriptorBufferBinding>::from(buffers);
         rstd::slice_::sort_unstable_by(prepared_buffers.as_mut_slice().as_mut_ref(),
                                        [](const auto& lhs, const auto& rhs) {
                                            return lhs.binding < rhs.binding;
@@ -722,8 +721,8 @@ private:
     }
 
     auto CreatePool(const vulkan::Device& device)
-        -> Result<rstd::sync::Arc<vvk::DescriptorArenaGeneration>, resource::ResourceError> {
-        auto sizes = rstd::vec::Vec<VkDescriptorPoolSize>::with_capacity(usize(2));
+        -> Result<Arc<vvk::DescriptorArenaGeneration>, resource::ResourceError> {
+        auto sizes = Vec<VkDescriptorPoolSize>::with_capacity(usize(2));
         sizes.push(VkDescriptorPoolSize {
             .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .descriptorCount = 8192,
@@ -747,10 +746,10 @@ private:
         return Ok(rstd::move(*created.arena));
     }
 
-    Option<rstd::sync::Arc<vvk::DescriptorArenaGeneration>>                     m_pool;
-    rstd::collections::HashMap<DescriptorSetPacketKey, vvk::DescriptorSetLease> m_packets;
-    u64                                                                         m_generation { 1 };
-    u64                                                                         m_next_index { 0 };
+    Option<Arc<vvk::DescriptorArenaGeneration>>              m_pool;
+    HashMap<DescriptorSetPacketKey, vvk::DescriptorSetLease> m_packets;
+    u64                                                      m_generation { 1 };
+    u64                                                      m_next_index { 0 };
 };
 
 } // namespace vrento::resource_registry

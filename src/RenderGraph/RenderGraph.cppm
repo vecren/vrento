@@ -1,6 +1,5 @@
 export module vrento.rgraph:render_graph;
 import rstd;
-import cppstd;
 import vrento.resource;
 
 import :dependency_graph;
@@ -9,6 +8,7 @@ import :pass_node;
 import :tex_node;
 
 using namespace rstd::prelude;
+using rstd::collections::HashMap;
 
 export namespace vrento::rg
 {
@@ -28,11 +28,11 @@ enum class TextureKind
 };
 
 struct TextureDesc {
-    String                                 name;
-    String                                 key;
-    TextureKind                            kind { TextureKind::Imported };
-    rstd::Option<resource::TextureRequest> request;
-    rstd::Option<String>                   allocation_family;
+    String                           name;
+    String                           key;
+    TextureKind                      kind { TextureKind::Imported };
+    Option<resource::TextureRequest> request;
+    Option<String>                   allocation_family;
 };
 
 struct TextureNodeState {
@@ -58,7 +58,7 @@ struct RenderGraphBuilder {
     auto createTexture(const TextureDesc&, bool write = false) -> TextureNodeRef;
     void read(TextureNodeRef);
     void write(TextureNodeRef);
-    auto textureState(TextureNodeRef) const -> rstd::Option<TextureNodeState>;
+    auto textureState(TextureNodeRef) const -> Option<TextureNodeState>;
     auto workPassNode() const -> const PassNode&;
     void markSelfWrite(TextureNodeRef);
     void markVirtualWrite(TextureNodeRef);
@@ -81,23 +81,21 @@ class RenderGraph {
 public:
     RenderGraph();
 
-    auto getPass(PassHandle) -> rstd::Option<Pass&>;
-    auto getPass(PassHandle) const -> rstd::Option<const Pass&>;
-    auto passState(NodeHandle) const -> rstd::Option<PassNodeState>;
-    auto textureState(TextureNodeRef) const -> rstd::Option<TextureNodeState>;
-    auto latestTexture(rstd::ref<rstd::str> key) const -> rstd::Option<TextureNodeRef>;
+    auto getPass(PassHandle) -> Option<Pass&>;
+    auto getPass(PassHandle) const -> Option<const Pass&>;
+    auto passState(NodeHandle) const -> Option<PassNodeState>;
+    auto textureState(TextureNodeRef) const -> Option<TextureNodeState>;
+    auto latestTexture(ref<str> key) const -> Option<TextureNodeRef>;
     auto readTexture(NodeHandle pass_node, TextureNodeRef texture) -> bool;
 
-    auto topologicalOrder() const
-        -> rstd::Result<rstd::vec::Vec<NodeHandle>, RenderGraphOrderError>;
-    auto getLastReadTextures(rstd::slice<NodeHandle>) const
-        -> rstd::vec::Vec<rstd::vec::Vec<TextureNodeState>>;
+    auto topologicalOrder() const -> Result<Vec<NodeHandle>, RenderGraphOrderError>;
+    auto getLastReadTextures(slice<NodeHandle>) const -> Vec<Vec<TextureNodeState>>;
     auto resourcePlan() const -> resource::ResourcePlan;
 
-    void ToGraphviz(rstd::ref<rstd::str> path) const;
+    void ToGraphviz(ref<str> path) const;
 
     template<typename TPass, typename CB>
-    auto addPass(rstd::ref<rstd::str> name, PassNode::Type type, CB&& callback) -> NodeHandle {
+    auto addPass(ref<str> name, PassNode::Type type, CB&& callback) -> NodeHandle {
         using Desc = typename TPass::Desc;
 
         auto node_handle = m_dg.AddNode();
@@ -114,23 +112,25 @@ public:
         Desc               desc {};
         callback(builder, desc);
 
-        std::unique_ptr<Pass> pass = std::make_unique<TPass>(std::move(desc));
-        (void)m_passes.insert(pass_handle, std::move(pass));
+        auto pass = Box<TPass>::make(rstd::move(desc));
+        auto owned =
+            Box<dyn<PassObject>>::from_raw(dyn<PassObject>::from_ptr(rstd::move(pass).into_raw()));
+        (void)m_passes.insert(pass_handle, rstd::move(owned));
         return node_handle;
     }
 
 private:
     friend struct RenderGraphBuilder;
 
-    using PassNodeMap   = rstd::collections::HashMap<NodeHandle, PassNode>;
-    using TexNodeMap    = rstd::collections::HashMap<NodeHandle, TexNode>;
-    using PassMap       = rstd::collections::HashMap<PassHandle, std::unique_ptr<Pass>>;
-    using TextureKeyMap = rstd::collections::HashMap<String, NodeHandle>;
+    using PassNodeMap   = HashMap<NodeHandle, PassNode>;
+    using TexNodeMap    = HashMap<NodeHandle, TexNode>;
+    using PassMap       = HashMap<PassHandle, Box<dyn<PassObject>>>;
+    using TextureKeyMap = HashMap<String, NodeHandle>;
 
-    auto getPassNode(NodeHandle) -> rstd::Option<PassNode&>;
-    auto getPassNode(NodeHandle) const -> rstd::Option<const PassNode&>;
-    auto getTexNode(NodeHandle) -> rstd::Option<TexNode&>;
-    auto getTexNode(NodeHandle) const -> rstd::Option<const TexNode&>;
+    auto getPassNode(NodeHandle) -> Option<PassNode&>;
+    auto getPassNode(NodeHandle) const -> Option<const PassNode&>;
+    auto getTexNode(NodeHandle) -> Option<TexNode&>;
+    auto getTexNode(NodeHandle) const -> Option<const TexNode&>;
     auto createTextureNode(const TextureDesc&, bool write) -> TextureNodeRef;
     auto createNewTextureNode(const TextureDesc&) -> TextureNodeRef;
     void connectTextureRead(TextureNodeRef, NodeHandle pass_node);
@@ -140,7 +140,7 @@ private:
     auto isPassNode(NodeHandle) const -> bool;
     auto isVirtualPassNode(NodeHandle) const -> bool;
     auto isRenderPassNode(NodeHandle) const -> bool;
-    auto passWriteTarget(NodeHandle) const -> rstd::Option<String>;
+    auto passWriteTarget(NodeHandle) const -> Option<String>;
 
     usize           m_next_pass_index { 0 };
     u64             m_resource_generation { 0 };

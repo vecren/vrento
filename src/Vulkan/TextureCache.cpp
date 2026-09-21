@@ -14,16 +14,21 @@ module;
 module vrento.vulkan;
 import rstd;
 import rstd.log;
-import rstd.cppstd;
 
 import vrento.texture_types;
 import vrento.image;
 import vrento.video_playback;
 import wavsen.video;
 
+using rstd::mem::memcpy;
+
 using namespace vrento;
 using namespace vrento::vulkan;
 using namespace rstd::prelude;
+using namespace rstd::literals;
+using rstd::ffi::CString;
+using rstd::sync::Arc;
+using rstd::sync::Weak;
 
 namespace vrento
 {
@@ -418,23 +423,24 @@ Option<ExImageParameters> TextureCache::CreateExTex(u32 width, u32 height, VkFor
     return opt;
 }
 
-Option<rstd::sync::Arc<TextureAllocation>>
-TextureCache::AllocateImportedTexture(const Image&                                      image,
-                                      Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback) {
+Option<Arc<TextureAllocation>>
+TextureCache::AllocateImportedTexture(const Image&                          image,
+                                      Option<Arc<rstd::dyn<VideoPlayback>>> playback) {
     if (image.header.kind == ImageKind::Video) {
         return CreateVideoTex(image, rstd::move(playback));
     }
 
     ImageSlots img_slots;
 
-    img_slots.slots.resize(image.slots.size());
+    img_slots.slots.reserve(image.slots.len());
 
     auto& sam = image.header.sample;
 
-    for (std::size_t i = 0; i < image.slots.size(); ++i) {
+    for (usize i {}; i < image.slots.len(); ++i) {
+        img_slots.slots.push(AllocatedImageParameters {});
         auto&       image_paras   = img_slots.slots[i];
         const auto& image_slot    = image.slots[i];
-        auto        mipmap_levels = image_slot.mipmaps.size();
+        auto        mipmap_levels = image_slot.mipmaps.len().to_primitive();
 
         // check data
         if (! image_slot) return rstd::None();
@@ -474,7 +480,7 @@ TextureCache::AllocateImportedTexture(const Image&                              
             return rstd::None();
         }
     }
-    return rstd::Some(rstd::sync::Arc<TextureAllocation>::make(rstd::move(img_slots)));
+    return rstd::Some(Arc<TextureAllocation>::make(rstd::move(img_slots)));
 }
 
 void TextureCache::allocateCmd() {
@@ -538,12 +544,12 @@ Option<AllocatedImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
     return None();
 }
 
-Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(TextureKey key) {
+Option<Arc<TextureAllocation>> TextureCache::AllocateTexture(TextureKey key) {
     auto image = CreateTex(rstd::move(key));
     if (image.is_none()) return None();
     ImageSlots slots;
-    slots.slots.push_back(rstd::move(image).unwrap());
-    return Some(rstd::sync::Arc<TextureAllocation>::make(rstd::move(slots)));
+    slots.slots.push(rstd::move(image).unwrap());
+    return Some(Arc<TextureAllocation>::make(rstd::move(slots)));
 }
 
 /* ===========================================================================
@@ -583,7 +589,7 @@ public:
     int read(rstd::uint8_t* buf, int size) {
         if (size <= 0) return 0;
         auto bytes = rstd::mut_ref<rstd::byte[]>::from_raw_parts(
-            reinterpret_cast<rstd::byte*>(buf), usize(static_cast<std::size_t>(size)));
+            reinterpret_cast<rstd::byte*>(buf), usize(static_cast<rstd::size_t>(size)));
         auto result = m_reader.read(rstd::as_u8_slice_mut(bytes));
         if (result.is_err()) return -1;
         return static_cast<int>(rstd::move(result).unwrap_unchecked().to_primitive());
@@ -613,13 +619,13 @@ private:
     rstd::io::RangeReader m_reader;
 };
 
-wavsen::video::HwAccel ParseHwdec(std::string_view value) {
-    if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
-    if (value == "vaapi") return wavsen::video::HwAccel::Vaapi;
+wavsen::video::HwAccel ParseHwdec(ref<str> value) {
+    if (value == "vulkan"_str) return wavsen::video::HwAccel::Vulkan;
+    if (value == "vaapi"_str) return wavsen::video::HwAccel::Vaapi;
 #if __is_target_os(macos)
-    if (value == "videotoolbox") return wavsen::video::HwAccel::VideoToolbox;
+    if (value == "videotoolbox"_str) return wavsen::video::HwAccel::VideoToolbox;
 #endif
-    if (value == "none") return wavsen::video::HwAccel::None;
+    if (value == "none"_str) return wavsen::video::HwAccel::None;
     return wavsen::video::HwAccel::Auto;
 }
 
@@ -644,15 +650,15 @@ const char* FrameKindLabel(wavsen::video::FrameKind k) {
     return "?";
 }
 
-rstd::vec::Vec<const char*> ExtensionPtrs(std::span<const std::string> names) {
-    auto out = rstd::vec::Vec<const char*>::with_capacity(usize(names.size()));
-    for (const auto& name : names) out.push(name.c_str());
+Vec<const char*> ExtensionPtrs(slice<CString> names) {
+    auto out = Vec<const char*>::with_capacity(names.len());
+    for (const auto& name : names) out.push(name.as_ptr());
     return out;
 }
 
-rstd::vec::Vec<wavsen::video::QueueFamily> QueueFamiliesForFfmpeg(const Device& device) {
+Vec<wavsen::video::QueueFamily> QueueFamiliesForFfmpeg(const Device& device) {
     auto props = device.gpu().GetQueueFamilyProperties();
-    auto out   = rstd::vec::Vec<wavsen::video::QueueFamily>::with_capacity(props.len());
+    auto out   = Vec<wavsen::video::QueueFamily>::with_capacity(props.len());
     for (rstd::uint32_t i = 0; i < props.len().to_primitive(); ++i) {
         out.push(wavsen::video::QueueFamily {
             .index      = u32(i),
@@ -778,16 +784,16 @@ struct TextureCache::VideoRegistry {
         Runtime& operator=(Runtime&&) noexcept = default;
         ~Runtime();
 
-        VideoRegistry*                                    registry { nullptr };
-        TextureCache*                                     owner { nullptr };
-        const Device*                                     device { nullptr };
-        String                                            key;
-        rstd::uint32_t                                    width { 0 };
-        rstd::uint32_t                                    height { 0 };
-        ImageParameters                                   target;
-        Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback;
-        Option<Box<wavsen::video::VideoDecoder>>          decoder;
-        wavsen::video::Nv12Frame                          nv12_scratch;
+        VideoRegistry*                           registry { nullptr };
+        TextureCache*                            owner { nullptr };
+        const Device*                            device { nullptr };
+        String                                   key;
+        rstd::uint32_t                           width { 0 };
+        rstd::uint32_t                           height { 0 };
+        ImageParameters                          target;
+        Option<Arc<rstd::dyn<VideoPlayback>>>    playback;
+        Option<Box<wavsen::video::VideoDecoder>> decoder;
+        wavsen::video::Nv12Frame                 nv12_scratch;
 #if __is_target_os(macos)
         struct AppleUploadSlot {
             vvk::CommandBuffers          command_storage;
@@ -799,13 +805,13 @@ struct TextureCache::VideoRegistry {
             bool                         pending { false };
         };
 
-        std::array<AppleUploadSlot, 3> apple_upload_slots;
-        std::size_t                    next_apple_upload_slot {};
-        void*                          metal_device { nullptr };
-        bool                           metal_device_queried { false };
-        bool                           prepare_apple_upload_slot(AppleUploadSlot&);
-        bool                           ensure_apple_upload_command(AppleUploadSlot&);
-        void                           retire_apple_upload_slot(AppleUploadSlot&);
+        rstd::array<AppleUploadSlot, 3> apple_upload_slots;
+        rstd::size_t                    next_apple_upload_slot {};
+        void*                           metal_device { nullptr };
+        bool                            metal_device_queried { false };
+        bool                            prepare_apple_upload_slot(AppleUploadSlot&);
+        bool                            ensure_apple_upload_command(AppleUploadSlot&);
+        void                            retire_apple_upload_slot(AppleUploadSlot&);
         bool upload_apple_frame(const wavsen::video::AppleFrameLease&, const ImageParameters&);
 #endif
         f64  pts_acc {};
@@ -815,7 +821,7 @@ struct TextureCache::VideoRegistry {
 
         void Pump(double dt_seconds);
     };
-    Vec<rstd::sync::Weak<dyn<TextureAllocationRuntime>>> runtimes;
+    Vec<Weak<dyn<TextureAllocationRuntime>>> runtimes;
 
     const wavsen::video::Producer* ensureProducer(const Device& device, rstd::uint32_t width,
                                                   rstd::uint32_t height) {
@@ -825,18 +831,18 @@ struct TextureCache::VideoRegistry {
         if (r.is_err()) {
             rstd_warn(
                 "CreateVideoTex: shared-device producer unavailable; falling back to sw decode: {}",
-                std::move(r).unwrap_err().message);
+                rstd::move(r).unwrap_err().message);
             return nullptr;
         }
-        producer = rstd::Some(std::move(r).unwrap());
+        producer = rstd::Some(rstd::move(r).unwrap());
         return producer->get();
     }
 
     wavsen::video::YuvToRgba* ensureYuv(const Device& device, rstd::uint32_t width,
                                         rstd::uint32_t height) {
         if (yuv.is_some() && width <= yuv_max_width && height <= yuv_max_height) return yuv->get();
-        auto next_w = std::max(width, yuv_max_width);
-        auto next_h = std::max(height, yuv_max_height);
+        auto next_w = rstd::cmp::max(yuv_max_width, width);
+        auto next_h = rstd::cmp::max(yuv_max_height, height);
         auto r      = wavsen::video::YuvToRgba::create(device.instance_dispatch(),
                                                        *device.gpu(),
                                                        device.handle().Dispatch(),
@@ -846,7 +852,7 @@ struct TextureCache::VideoRegistry {
                                                        u32(next_h));
         if (r.is_err()) {
             rstd_error("CreateVideoTex: YuvToRgba create failed: {}",
-                       std::move(r).unwrap_err().message);
+                       rstd::move(r).unwrap_err().message);
             return nullptr;
         }
         yuv            = rstd::Some(rstd::move(r).unwrap());
@@ -942,7 +948,8 @@ bool TextureCache::VideoRegistry::Runtime::upload_apple_frame(
         return false;
     }
 
-    auto& slot = apple_upload_slots[next_apple_upload_slot++ % apple_upload_slots.size()];
+    auto& slot = apple_upload_slots[usize(next_apple_upload_slot++ %
+                                          apple_upload_slots.len().to_primitive())];
     if (! prepare_apple_upload_slot(slot)) {
         rstd_error("PumpVideoTextures[{}]: failed to prepare asynchronous video upload slot",
                    key.as_str());
@@ -1089,11 +1096,10 @@ struct Impl<vrento::vulkan::TextureAllocationRuntime,
 
 } // namespace rstd
 
-Option<rstd::sync::Arc<TextureAllocation>>
-TextureCache::CreateVideoTex(const Image&                                      image,
-                             Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback) {
-    if (image.slots.empty() || image.slots[0].mipmaps.empty()) return rstd::None();
-    auto& mip = image.slots[0].mipmaps[0];
+Option<Arc<TextureAllocation>>
+TextureCache::CreateVideoTex(const Image& image, Option<Arc<rstd::dyn<VideoPlayback>>> playback) {
+    if (image.slots.is_empty() || image.slots[usize(0)].mipmaps.is_empty()) return rstd::None();
+    auto& mip = image.slots[usize(0)].mipmaps[usize(0)];
     if (mip.video_source.is_none() || mip.width <= 0 || mip.height <= 0) {
         rstd_error("CreateVideoTex: incomplete video-tex slot for {}", image.key);
         return rstd::None();
@@ -1101,7 +1107,7 @@ TextureCache::CreateVideoTex(const Image&                                      i
 
     if (m_video_registry.is_none()) {
         m_video_registry                 = Some(Box<VideoRegistry>::make());
-        m_video_registry->get()->options = m_video_decode_options;
+        m_video_registry->get()->options = m_video_decode_options.clone();
     }
     auto* registry = m_video_registry->get();
     if (! m_tex_cmd) allocateCmd();
@@ -1112,7 +1118,7 @@ TextureCache::CreateVideoTex(const Image&                                      i
     runtime.registry = registry;
     runtime.owner    = this;
     runtime.device   = &m_device;
-    runtime.key      = String::make(rstd::cppstd::as_str(image.key).unwrap());
+    runtime.key      = image.key.clone();
     runtime.playback = rstd::move(playback);
     /* NV12 chroma is 4:2:0 → both dims even. */
     const auto source_width  = static_cast<rstd::uint32_t>(mip.width);
@@ -1155,7 +1161,7 @@ TextureCache::CreateVideoTex(const Image&                                      i
         rstd_error("CreateVideoTex: VkImage allocation failed for {}", image.key);
         return rstd::None();
     }
-    auto target_image = std::move(*img_opt);
+    auto target_image = rstd::move(*img_opt);
     AssignImageGeneration(target_image);
     runtime.target = ToImageParameters(target_image);
 #if ! __is_target_os(macos)
@@ -1214,17 +1220,14 @@ TextureCache::CreateVideoTex(const Image&                                      i
     }
 
     /* 3) Open the decoder. Each backend trial gets its own range cursor. */
-    auto factory =
-        rstd::boxed::Box<dyn<FnMut<rstd::boxed::Box<dyn<wavsen::video::InputStream>>()>>>::make(
-            [source =
-                 rstd::move(video_source)]() -> rstd::boxed::Box<dyn<wavsen::video::InputStream>> {
-                return rstd::boxed::Box<dyn<wavsen::video::InputStream>>::make(
-                    RangeInputStream(source.clone()));
-            });
-    const auto              requested_hwdec = ParseHwdec(registry->options.hwdec);
+    auto factory = Box<dyn<FnMut<Box<dyn<wavsen::video::InputStream>>()>>>::make(
+        [source = rstd::move(video_source)]() -> Box<dyn<wavsen::video::InputStream>> {
+            return Box<dyn<wavsen::video::InputStream>>::make(RangeInputStream(source.clone()));
+        });
+    const auto              requested_hwdec = ParseHwdec(registry->options.hwdec.as_str());
     wavsen::video::OpenOpts opts {
         requested_hwdec,
-        String::make(rstd::cppstd::as_str(registry->options.render_node).unwrap()),
+        registry->options.render_node.clone(),
     };
     const wavsen::video::Producer* producer = nullptr;
 #if __is_target_os(macos)
@@ -1236,7 +1239,7 @@ TextureCache::CreateVideoTex(const Image&                                      i
         producer = registry->ensureProducer(m_device, runtime.width, runtime.height);
         if (! producer) opts.hwaccel = wavsen::video::HwAccel::None;
     }
-    auto dec_r = wavsen::video::VideoDecoder::open_from_stream(std::move(factory),
+    auto dec_r = wavsen::video::VideoDecoder::open_from_stream(rstd::move(factory),
                                                                u32(runtime.width),
                                                                u32(runtime.height),
                                                                /*loop=*/true,
@@ -1248,7 +1251,7 @@ TextureCache::CreateVideoTex(const Image&                                      i
                    dec_r.unwrap_err().message);
         return None();
     }
-    runtime.decoder = rstd::Some(std::move(dec_r).unwrap());
+    runtime.decoder = rstd::Some(rstd::move(dec_r).unwrap());
 #if __is_target_os(macos)
     if ((*runtime.decoder)->kind() != wavsen::video::FrameKind::VideoToolbox &&
         ! registry->ensureYuv(m_device, runtime.width, runtime.height)) {
@@ -1264,11 +1267,10 @@ TextureCache::CreateVideoTex(const Image&                                      i
               FrameKindLabel((*runtime.decoder)->kind()));
 
     ImageSlots img_slots {};
-    img_slots.slots.resize(1);
-    img_slots.slots[0] = std::move(target_image);
-    auto runtime_owner = rstd::sync::Arc<dyn<TextureAllocationRuntime>>::make(rstd::move(runtime));
-    auto allocation    = rstd::sync::Arc<TextureAllocation>::make(rstd::move(img_slots),
-                                                                  Some(runtime_owner.clone()));
+    img_slots.slots.push(rstd::move(target_image));
+    auto runtime_owner = Arc<dyn<TextureAllocationRuntime>>::make(rstd::move(runtime));
+    auto allocation =
+        Arc<TextureAllocation>::make(rstd::move(img_slots), Some(runtime_owner.clone()));
     registry->runtimes.push(runtime_owner.downgrade());
     return Some(rstd::move(allocation));
 }
@@ -1366,7 +1368,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
             rstd_error("PumpVideoTextures[{}]: decode {}: {}",
                        s.key.as_str(),
                        FrameKindLabel(fkind),
-                       std::move(r).unwrap_err().message);
+                       rstd::move(r).unwrap_err().message);
             break;
         }
         auto kind = r.unwrap();
@@ -1539,11 +1541,11 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         rstd_error("PumpVideoTextures[{}]: yuv conversion {}: {}",
                    s.key.as_str(),
                    FrameKindLabel(fkind),
-                   std::move(cv).unwrap_err().message);
+                   rstd::move(cv).unwrap_err().message);
         publish_time();
         return;
     }
-    CloseSyncFd(std::move(cv).unwrap());
+    CloseSyncFd(rstd::move(cv).unwrap());
     s.have_frame = true;
     publish_time();
 }
@@ -1551,7 +1553,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
 void TextureCache::PumpVideoTextures(double dt_seconds) {
     if (m_video_registry.is_none()) return;
     auto* registry = m_video_registry->get();
-    registry->runtimes.retain([](const rstd::sync::Weak<dyn<TextureAllocationRuntime>>& runtime) {
+    registry->runtimes.retain([](const Weak<dyn<TextureAllocationRuntime>>& runtime) {
         return ! runtime.expired();
     });
     for (const auto& weak : registry->runtimes) {
@@ -1565,7 +1567,7 @@ bool TextureCache::UploadFontAtlasRegion(ref<TextureAllocation> texture, const r
                                          rstd::uint32_t w, rstd::uint32_t h) {
     if (w == 0 || h == 0) return true;
     auto view = texture->View();
-    if (view.slots.empty()) return false;
+    if (view.slots.is_empty()) return false;
     ImageParameters ip = view.getActive();
 
     // Tightly-packed staging buffer for the AABB. Allocating per-call keeps
@@ -1582,7 +1584,9 @@ bool TextureCache::UploadFontAtlasRegion(ref<TextureAllocation> texture, const r
         auto  mapping = mapped.unwrap_unchecked();
         auto* dst     = static_cast<rstd::uint8_t*>(mapping.data());
         for (rstd::uint32_t row = 0; row < h; ++row) {
-            std::memcpy(dst + row * w, atlas + (y + row) * atlas_w + x, static_cast<size_t>(w));
+            memcpy(dst + row * w,
+                   atlas + (y + row) * atlas_w + x,
+                   rstd::usize(static_cast<rstd::size_t>(w)));
         }
         if (memory.flush().is_err()) return false;
     }
@@ -1665,14 +1669,13 @@ void TextureCache::AssignImageGeneration(ExImageParameters& image) {
 }
 
 void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
-    m_video_decode_options = std::move(options);
+    m_video_decode_options = rstd::move(options);
     if (m_video_registry.is_some()) {
         auto* registry    = m_video_registry->get();
-        registry->options = m_video_decode_options;
-        registry->runtimes.retain(
-            [](const rstd::sync::Weak<dyn<TextureAllocationRuntime>>& runtime) {
-                return ! runtime.expired();
-            });
+        registry->options = m_video_decode_options.clone();
+        registry->runtimes.retain([](const Weak<dyn<TextureAllocationRuntime>>& runtime) {
+            return ! runtime.expired();
+        });
         if (registry->runtimes.is_empty()) (void)registry->producer.take();
     }
 }

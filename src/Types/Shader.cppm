@@ -1,7 +1,12 @@
 export module vrento.shader_types;
+import rstd;
+
+using rstd::vec::Vec;
 
 export namespace vrento
 {
+
+using ShaderCode = Vec<rstd::uint32_t>;
 
 enum class ShaderType
 {

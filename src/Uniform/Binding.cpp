@@ -1,6 +1,7 @@
 module vrento.uniform_binding;
 import rstd;
 import vrento.resource;
+
 using namespace rstd::prelude;
 using namespace rstd::literals;
 namespace vrento
@@ -118,14 +119,14 @@ public:
         for (const auto& binding : m_source.outputs) {
             if (binding.output != output) continue;
             if (binding.slot_index >= m_layout.slots.len())
-                return Err(UniformError { String::make("invalid uniform slot"_str) });
+                return Err(UniformError { "invalid uniform slot"_Str });
             auto result = SerializeUniformValue(
                 m_data, m_layout.slots[binding.slot_index], value, m_convention, m_abi);
             if (result.is_err())
                 return Err(UniformError { rstd::move(result).unwrap_err_unchecked().message });
             wrote = true;
         }
-        if (! wrote) return Err(UniformError { String::make("uniform output is not bound"_str) });
+        if (! wrote) return Err(UniformError { "uniform output is not bound"_Str });
         return Ok(empty {});
     }
 

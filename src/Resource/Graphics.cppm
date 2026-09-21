@@ -1,11 +1,14 @@
 export module vrento.resource_registry:graphics;
 import rstd;
-import rstd.cppstd;
 import vrento.resource;
 import vrento.vulkan;
 
 import :descriptor;
 import :resource_key;
+
+using rstd::collections::HashMap;
+using rstd::sync::Arc;
+using rstd::sync::Weak;
 
 using namespace rstd::prelude;
 
@@ -58,8 +61,8 @@ export namespace vrento::resource_registry
 {
 
 struct PipelineLayoutSchema {
-    rstd::vec::Vec<resource::DescriptorLayoutHandle> descriptor_layouts;
-    rstd::vec::Vec<PipelinePushConstantSchema>       push_constants;
+    Vec<resource::DescriptorLayoutHandle> descriptor_layouts;
+    Vec<PipelinePushConstantSchema>       push_constants;
 
     auto clone() const -> PipelineLayoutSchema {
         return PipelineLayoutSchema {
@@ -72,16 +75,16 @@ struct PipelineLayoutSchema {
 };
 
 struct PipelineLayoutResourceEntry {
-    resource::PipelineLayoutHandle                   handle;
-    rstd::vec::Vec<resource::DescriptorLayoutHandle> descriptor_layouts;
-    rstd::vec::Vec<PipelinePushConstantSchema>       push_constants;
-    rstd::uint64_t                                   push_constant_identity {};
-    vvk::PipelineLayout                              layout;
+    resource::PipelineLayoutHandle        handle;
+    Vec<resource::DescriptorLayoutHandle> descriptor_layouts;
+    Vec<PipelinePushConstantSchema>       push_constants;
+    rstd::uint64_t                        push_constant_identity {};
+    vvk::PipelineLayout                   layout;
 };
 
 struct PipelineLayoutResult {
-    resource::PipelineLayoutHandle               handle;
-    rstd::sync::Arc<PipelineLayoutResourceEntry> physical;
+    resource::PipelineLayoutHandle   handle;
+    Arc<PipelineLayoutResourceEntry> physical;
 };
 
 } // namespace vrento::resource_registry
@@ -119,10 +122,9 @@ public:
     auto Ensure(const Device& device, const PipelineLayoutRequest& request,
                 DescriptorLayoutRegistry& descriptor_layouts)
         -> Result<PipelineLayoutResult, resource::ResourceError> {
-        auto vk_layouts =
-            rstd::vec::Vec<VkDescriptorSetLayout>::with_capacity(request.descriptor_sets.len());
-        auto layout_handles = rstd::vec::Vec<resource::DescriptorLayoutHandle>::with_capacity(
-            request.descriptor_sets.len());
+        auto vk_layouts = Vec<VkDescriptorSetLayout>::with_capacity(request.descriptor_sets.len());
+        auto layout_handles =
+            Vec<resource::DescriptorLayoutHandle>::with_capacity(request.descriptor_sets.len());
         for (const auto& descriptor_set : request.descriptor_sets) {
             auto ensured = descriptor_layouts.Ensure(device, descriptor_set);
             if (ensured.is_err()) return Err(rstd::move(ensured).unwrap_err_unchecked());
@@ -143,7 +145,7 @@ public:
         }
 
         auto push_constants =
-            rstd::vec::Vec<PipelinePushConstantSchema>::with_capacity(request.push_constants.len());
+            Vec<PipelinePushConstantSchema>::with_capacity(request.push_constants.len());
         for (const auto& range : request.push_constants) {
             if (range.stageFlags == 0 || range.size == 0) {
                 return Err(resource::ResourceError {
@@ -180,7 +182,7 @@ public:
         }
 
         auto vk_push_constants =
-            rstd::vec::Vec<VkPushConstantRange>::with_capacity(schema.push_constants.len());
+            Vec<VkPushConstantRange>::with_capacity(schema.push_constants.len());
         for (const auto& range : schema.push_constants) {
             vk_push_constants.push(VkPushConstantRange {
                 .stageFlags = range.stage_flags,
@@ -208,14 +210,13 @@ public:
 
         auto handle                 = NextHandle();
         auto push_constant_identity = PushConstantIdentity(schema.push_constants.as_slice());
-        auto entry =
-            rstd::sync::Arc<PipelineLayoutResourceEntry>::make(PipelineLayoutResourceEntry {
-                .handle                 = handle,
-                .descriptor_layouts     = schema.descriptor_layouts.clone(),
-                .push_constants         = schema.push_constants.clone(),
-                .push_constant_identity = push_constant_identity,
-                .layout                 = rstd::move(layout),
-            });
+        auto entry = Arc<PipelineLayoutResourceEntry>::make(PipelineLayoutResourceEntry {
+            .handle                 = handle,
+            .descriptor_layouts     = schema.descriptor_layouts.clone(),
+            .push_constants         = schema.push_constants.clone(),
+            .push_constant_identity = push_constant_identity,
+            .layout                 = rstd::move(layout),
+        });
         (void)m_handles.insert(schema.clone(), handle);
         (void)m_entries.insert(handle, entry.clone());
         return Ok(PipelineLayoutResult {
@@ -225,23 +226,23 @@ public:
     }
 
     auto Resolve(resource::PipelineLayoutHandle handle) const
-        -> Option<rstd::sync::Arc<PipelineLayoutResourceEntry>> {
+        -> Option<Arc<PipelineLayoutResourceEntry>> {
         auto entry = m_entries.get(handle);
         if (entry.is_none()) return None();
         return Some((**entry).clone());
     }
 
     void PruneExpired() {
-        m_entries.retain([&](const resource::PipelineLayoutHandle&,
-                             rstd::sync::Arc<PipelineLayoutResourceEntry>& entry) {
-            if (entry.strong_count() > usize(1)) return true;
-            auto schema = PipelineLayoutSchema {
-                .descriptor_layouts = entry->descriptor_layouts.clone(),
-                .push_constants     = entry->push_constants.clone(),
-            };
-            (void)m_handles.remove(schema);
-            return false;
-        });
+        m_entries.retain(
+            [&](const resource::PipelineLayoutHandle&, Arc<PipelineLayoutResourceEntry>& entry) {
+                if (entry.strong_count() > usize(1)) return true;
+                auto schema = PipelineLayoutSchema {
+                    .descriptor_layouts = entry->descriptor_layouts.clone(),
+                    .push_constants     = entry->push_constants.clone(),
+                };
+                (void)m_handles.remove(schema);
+                return false;
+            });
     }
 
     void Reset() {
@@ -273,38 +274,36 @@ private:
         return { .index = m_next_index++, .generation = m_generation };
     }
 
-    rstd::collections::HashMap<PipelineLayoutSchema, resource::PipelineLayoutHandle> m_handles;
-    rstd::collections::HashMap<resource::PipelineLayoutHandle,
-                               rstd::sync::Arc<PipelineLayoutResourceEntry>>
-        m_entries;
-    u64 m_generation { 1 };
-    u64 m_next_index { 0 };
+    HashMap<PipelineLayoutSchema, resource::PipelineLayoutHandle>             m_handles;
+    HashMap<resource::PipelineLayoutHandle, Arc<PipelineLayoutResourceEntry>> m_entries;
+    u64                                                                       m_generation { 1 };
+    u64                                                                       m_next_index { 0 };
 };
 
 struct PipelineResourceEntry {
-    PipelineParameters                           pipeline;
-    rstd::sync::Arc<PipelineLayoutResourceEntry> layout;
+    PipelineParameters               pipeline;
+    Arc<PipelineLayoutResourceEntry> layout;
 };
 
 struct PipelineResourceResult {
-    rstd::sync::Arc<PipelineResourceEntry> pipeline;
-    resource::PipelineHandle               handle;
-    resource::RenderPassHandle             render_pass;
-    rstd::sync::Arc<vvk::RenderPass>       render_pass_physical;
-    PipelineCacheKey                       cache_key;
-    RenderPassCacheKey                     render_pass_key;
-    bool                                   cache_hit { false };
-    u64                                    cache_observed_count { 0 };
-    bool                                   render_pass_cache_hit { false };
-    u64                                    render_pass_cache_observed_count { 0 };
+    Arc<PipelineResourceEntry> pipeline;
+    resource::PipelineHandle   handle;
+    resource::RenderPassHandle render_pass;
+    Arc<vvk::RenderPass>       render_pass_physical;
+    PipelineCacheKey           cache_key;
+    RenderPassCacheKey         render_pass_key;
+    bool                       cache_hit { false };
+    u64                        cache_observed_count { 0 };
+    bool                       render_pass_cache_hit { false };
+    u64                        render_pass_cache_observed_count { 0 };
 };
 
 struct FramebufferResourceResult {
-    rstd::sync::Arc<vvk::Framebuffer> framebuffer;
-    resource::FramebufferHandle       handle;
-    FramebufferCacheKey               cache_key;
-    bool                              cache_hit { false };
-    u64                               cache_observed_count { 0 };
+    Arc<vvk::Framebuffer>       framebuffer;
+    resource::FramebufferHandle handle;
+    FramebufferCacheKey         cache_key;
+    bool                        cache_hit { false };
+    u64                         cache_observed_count { 0 };
 };
 
 class PipelineCacheDiagnostics {
@@ -316,10 +315,10 @@ public:
         if (count.is_some()) {
             observed_count = ++**count;
         } else {
-            (void)m_seen.insert(key, observed_count);
+            (void)m_seen.insert(key.clone(), observed_count);
         }
         return PipelineCacheProbe {
-            .key            = std::move(key),
+            .key            = rstd::move(key),
             .hit            = hit,
             .observed_count = observed_count,
         };
@@ -328,9 +327,7 @@ public:
     void Reset() { m_seen.clear(); }
 
 private:
-    rstd::collections::HashMap<PipelineCacheKey, u64, rstd::hash::RandomState,
-                               PipelineCacheKeyEqual>
-        m_seen;
+    HashMap<PipelineCacheKey, u64, rstd::hash::RandomState, PipelineCacheKeyEqual> m_seen;
 };
 
 class FramebufferCacheDiagnostics {
@@ -348,10 +345,10 @@ public:
         if (count.is_some()) {
             observed_count = ++**count;
         } else {
-            (void)m_seen.insert(key, observed_count);
+            (void)m_seen.insert(key.clone(), observed_count);
         }
         return Probe {
-            .key            = std::move(key),
+            .key            = rstd::move(key),
             .hit            = hit,
             .observed_count = observed_count,
         };
@@ -360,16 +357,14 @@ public:
     void Reset() { m_seen.clear(); }
 
 private:
-    rstd::collections::HashMap<FramebufferCacheKey, u64, rstd::hash::RandomState,
-                               FramebufferCacheKeyEqual>
-        m_seen;
+    HashMap<FramebufferCacheKey, u64, rstd::hash::RandomState, FramebufferCacheKeyEqual> m_seen;
 };
 
 class FramebufferRegistry {
 public:
     auto Ensure(const Device& device, const FramebufferResourceRequest& request)
         -> Option<FramebufferResourceResult> {
-        if (request.render_pass == VK_NULL_HANDLE || request.attachments.empty()) {
+        if (request.render_pass == VK_NULL_HANDLE || request.attachments.is_empty()) {
             return None();
         }
 
@@ -381,21 +376,22 @@ public:
             return Some(FramebufferResourceResult {
                 .framebuffer          = (**slot).framebuffer.clone(),
                 .handle               = (**slot).handle,
-                .cache_key            = key,
+                .cache_key            = rstd::move(key),
                 .cache_hit            = true,
                 .cache_observed_count = (**slot).observed_count,
             });
         }
 
-        std::vector<VkImageView> attachment_views;
-        attachment_views.reserve(desc.attachments.size());
-        for (const auto& attachment : desc.attachments) attachment_views.push_back(attachment.view);
+        Vec<VkImageView> attachment_views;
+        attachment_views.reserve(desc.attachments.len());
+        for (const auto& attachment : desc.attachments)
+            attachment_views.push(VkImageView(attachment.view));
 
         VkFramebufferCreateInfo info {
             .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext           = nullptr,
             .renderPass      = desc.render_pass,
-            .attachmentCount = static_cast<uint32_t>(attachment_views.size()),
+            .attachmentCount = static_cast<rstd::uint32_t>(attachment_views.len().to_primitive()),
             .pAttachments    = attachment_views.data(),
             .width           = desc.extent.width,
             .height          = desc.extent.height,
@@ -405,10 +401,10 @@ public:
         if (device.handle().CreateFramebuffer(info, framebuffer) != VK_SUCCESS) {
             return None();
         }
-        auto shared = rstd::sync::Arc<vvk::Framebuffer>::make(std::move(framebuffer));
+        auto shared = Arc<vvk::Framebuffer>::make(rstd::move(framebuffer));
         auto handle = NextHandle();
         (void)m_handles.insert(handle, shared.downgrade());
-        (void)m_entries.insert(key,
+        (void)m_entries.insert(key.clone(),
                                Entry {
                                    .framebuffer    = shared.clone(),
                                    .handle         = handle,
@@ -417,7 +413,7 @@ public:
         return Some(FramebufferResourceResult {
             .framebuffer          = rstd::move(shared),
             .handle               = handle,
-            .cache_key            = key,
+            .cache_key            = rstd::move(key),
             .cache_hit            = false,
             .cache_observed_count = u64(1),
         });
@@ -439,8 +435,7 @@ public:
         if (m_generation == u64()) ++m_generation;
     }
 
-    auto Resolve(resource::FramebufferHandle handle) const
-        -> Option<rstd::sync::Arc<vvk::Framebuffer>> {
+    auto Resolve(resource::FramebufferHandle handle) const -> Option<Arc<vvk::Framebuffer>> {
         auto entry = m_handles.get(handle);
         if (entry.is_none()) return None();
         auto resource = (**entry).upgrade();
@@ -452,20 +447,18 @@ public:
 
 private:
     struct Entry {
-        rstd::sync::Arc<vvk::Framebuffer> framebuffer;
-        resource::FramebufferHandle       handle;
-        u64                               observed_count { 0 };
+        Arc<vvk::Framebuffer>       framebuffer;
+        resource::FramebufferHandle handle;
+        u64                         observed_count { 0 };
     };
 
     auto NextHandle() -> resource::FramebufferHandle {
         return { .index = m_next_index++, .generation = m_generation };
     }
 
-    using HandleMap =
-        rstd::collections::HashMap<resource::FramebufferHandle, rstd::sync::Weak<vvk::Framebuffer>>;
+    using HandleMap = HashMap<resource::FramebufferHandle, Weak<vvk::Framebuffer>>;
 
-    rstd::collections::HashMap<FramebufferCacheKey, Entry, rstd::hash::RandomState,
-                               FramebufferCacheKeyEqual>
+    HashMap<FramebufferCacheKey, Entry, rstd::hash::RandomState, FramebufferCacheKeyEqual>
               m_entries;
     u64       m_generation { 1 };
     u64       m_next_index { 0 };
@@ -481,11 +474,11 @@ inline bool HasPipelineResources(const PipelineResourceEntry& entry) {
 }
 
 struct RenderPassResourceResult {
-    rstd::sync::Arc<vvk::RenderPass> render_pass;
-    resource::RenderPassHandle       handle;
-    RenderPassCacheKey               cache_key;
-    bool                             cache_hit { false };
-    u64                              cache_observed_count { 0 };
+    Arc<vvk::RenderPass>       render_pass;
+    resource::RenderPassHandle handle;
+    RenderPassCacheKey         cache_key;
+    bool                       cache_hit { false };
+    u64                        cache_observed_count { 0 };
 };
 
 class RenderPassRegistry {
@@ -499,7 +492,7 @@ public:
             return Some(RenderPassResourceResult {
                 .render_pass          = (**slot).render_pass.clone(),
                 .handle               = (**slot).handle,
-                .cache_key            = key,
+                .cache_key            = rstd::move(key),
                 .cache_hit            = true,
                 .cache_observed_count = (**slot).observed_count,
             });
@@ -507,10 +500,10 @@ public:
 
         auto created = CreateRenderPass(device, desc);
         if (created.is_none()) return None();
-        auto shared = rstd::sync::Arc<vvk::RenderPass>::make(rstd::move(*created));
+        auto shared = Arc<vvk::RenderPass>::make(rstd::move(*created));
         auto handle = NextHandle();
         (void)m_handles.insert(handle, shared.downgrade());
-        (void)m_entries.insert(key,
+        (void)m_entries.insert(key.clone(),
                                Entry {
                                    .render_pass    = shared.clone(),
                                    .handle         = handle,
@@ -519,7 +512,7 @@ public:
         return Some(RenderPassResourceResult {
             .render_pass          = rstd::move(shared),
             .handle               = handle,
-            .cache_key            = key,
+            .cache_key            = rstd::move(key),
             .cache_hit            = false,
             .cache_observed_count = u64(1),
         });
@@ -546,8 +539,7 @@ public:
         if (m_generation == u64()) ++m_generation;
     }
 
-    auto Resolve(resource::RenderPassHandle handle) const
-        -> Option<rstd::sync::Arc<vvk::RenderPass>> {
+    auto Resolve(resource::RenderPassHandle handle) const -> Option<Arc<vvk::RenderPass>> {
         auto entry = m_handles.get(handle);
         if (entry.is_none()) return None();
         auto resource = (**entry).upgrade();
@@ -559,17 +551,16 @@ public:
 
 private:
     struct Entry {
-        rstd::sync::Arc<vvk::RenderPass> render_pass;
-        resource::RenderPassHandle       handle;
-        u64                              observed_count { 0 };
+        Arc<vvk::RenderPass>       render_pass;
+        resource::RenderPassHandle handle;
+        u64                        observed_count { 0 };
     };
 
     auto NextHandle() -> resource::RenderPassHandle {
         return { .index = m_next_index++, .generation = m_generation };
     }
 
-    using HandleMap =
-        rstd::collections::HashMap<resource::RenderPassHandle, rstd::sync::Weak<vvk::RenderPass>>;
+    using HandleMap = HashMap<resource::RenderPassHandle, Weak<vvk::RenderPass>>;
 
     static auto CreateRenderPass(const Device& device, const RenderPassResourceDesc& desc)
         -> Option<vvk::RenderPass> {
@@ -621,11 +612,11 @@ private:
             .layout     = desc.depth_attachment_layout,
         };
 
-        std::vector<VkAttachmentDescription> attachments;
-        attachments.reserve(3);
-        if (has_color) attachments.push_back(color);
-        if (has_resolve) attachments.push_back(resolve);
-        if (desc.has_depth_attachment) attachments.push_back(depth);
+        Vec<VkAttachmentDescription> attachments;
+        attachments.reserve(usize(3));
+        if (has_color) attachments.push(rstd::move(color));
+        if (has_resolve) attachments.push(rstd::move(resolve));
+        if (desc.has_depth_attachment) attachments.push(rstd::move(depth));
 
         VkSubpassDescription subpass {
             .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -655,7 +646,7 @@ private:
 
         VkRenderPassCreateInfo create {
             .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .attachmentCount = static_cast<uint32_t>(attachments.size()),
+            .attachmentCount = static_cast<rstd::uint32_t>(attachments.len().to_primitive()),
             .pAttachments    = attachments.data(),
             .subpassCount    = 1,
             .pSubpasses      = &subpass,
@@ -667,9 +658,7 @@ private:
         return Some(rstd::move(pass));
     }
 
-    rstd::collections::HashMap<RenderPassCacheKey, Entry, rstd::hash::RandomState,
-                               RenderPassCacheKeyEqual>
-              m_entries;
+    HashMap<RenderPassCacheKey, Entry, rstd::hash::RandomState, RenderPassCacheKeyEqual> m_entries;
     u64       m_generation { 1 };
     u64       m_next_index { 0 };
     HandleMap m_handles;
@@ -690,8 +679,8 @@ public:
                 .handle                           = (**slot).handle,
                 .render_pass                      = (**slot).render_pass,
                 .render_pass_physical             = (**slot).render_pass_physical.clone(),
-                .cache_key                        = key,
-                .render_pass_key                  = (**slot).render_pass_key,
+                .cache_key                        = rstd::move(key),
+                .render_pass_key                  = (**slot).render_pass_key.clone(),
                 .cache_hit                        = true,
                 .cache_observed_count             = (**slot).observed_count,
                 .render_pass_cache_hit            = true,
@@ -707,13 +696,13 @@ public:
         GraphicsPipeline   pipeline;
         PipelineParameters pipeline_parameters;
         pipeline.toDefault();
-        pipeline.depth       = desc.depth;
-        pipeline.raster      = desc.raster;
-        pipeline.multisample = desc.multisample;
-        const auto color_blends =
-            desc.render_pass.has_color_attachment
-                ? std::span<const VkPipelineColorBlendAttachmentState>(&desc.color_blend, 1)
-                : std::span<const VkPipelineColorBlendAttachmentState> {};
+        pipeline.depth          = desc.depth;
+        pipeline.raster         = desc.raster;
+        pipeline.multisample    = desc.multisample;
+        const auto color_blends = desc.render_pass.has_color_attachment
+                                      ? slice<VkPipelineColorBlendAttachmentState>::from_raw_parts(
+                                            &desc.color_blend, usize(1))
+                                      : slice<VkPipelineColorBlendAttachmentState> {};
         pipeline.setColorBlendStates(color_blends)
             .setCreateInfoOptions(desc.create_flags, desc.subpass)
             .setColorBlendOptions(desc.color_blend_flags, desc.blend_constants)
@@ -721,11 +710,11 @@ public:
             .setTopology(desc.topology)
             .setPrimitiveRestartEnable(desc.primitive_restart_enable)
             .setViewportScissorCount(desc.viewport_count, desc.scissor_count)
-            .setDynamicStates(desc.dynamic_states)
-            .addInputBindingDescription(desc.vertex_bindings)
-            .addInputAttributeDescription(desc.vertex_attrs);
+            .setDynamicStates(desc.dynamic_states.as_slice())
+            .addInputBindingDescription(desc.vertex_bindings.as_slice())
+            .addInputAttributeDescription(desc.vertex_attrs.as_slice());
         for (auto& spv : desc.shader_stages) {
-            pipeline.addStage(Box<ShaderSpv>::make(std::move(spv)));
+            pipeline.addStage(Box<ShaderSpv>::make(rstd::move(spv)));
         }
         if (! pipeline.create(device,
                               **render_pass->render_pass,
@@ -733,19 +722,19 @@ public:
                               pipeline_parameters)) {
             return None();
         }
-        auto entry  = rstd::sync::Arc<PipelineResourceEntry>::make(PipelineResourceEntry {
+        auto entry  = Arc<PipelineResourceEntry>::make(PipelineResourceEntry {
             .pipeline = rstd::move(pipeline_parameters),
             .layout   = (*pipeline_layout).clone(),
         });
         auto handle = NextHandle();
         (void)m_handles.insert(handle, entry.downgrade());
-        (void)m_entries.insert(key,
+        (void)m_entries.insert(key.clone(),
                                Entry {
                                    .pipeline             = entry.clone(),
                                    .handle               = handle,
                                    .render_pass          = render_pass->handle,
                                    .render_pass_physical = render_pass->render_pass.clone(),
-                                   .render_pass_key      = render_pass->cache_key,
+                                   .render_pass_key      = render_pass->cache_key.clone(),
                                    .observed_count       = u64(1),
                                });
         return Some(PipelineResourceResult {
@@ -753,8 +742,8 @@ public:
             .handle                           = handle,
             .render_pass                      = render_pass->handle,
             .render_pass_physical             = render_pass->render_pass.clone(),
-            .cache_key                        = key,
-            .render_pass_key                  = render_pass->cache_key,
+            .cache_key                        = rstd::move(key),
+            .render_pass_key                  = render_pass->cache_key.clone(),
             .cache_hit                        = false,
             .cache_observed_count             = u64(1),
             .render_pass_cache_hit            = render_pass->cache_hit,
@@ -778,8 +767,7 @@ public:
         if (m_generation == u64()) ++m_generation;
     }
 
-    auto Resolve(resource::PipelineHandle handle) const
-        -> Option<rstd::sync::Arc<PipelineResourceEntry>> {
+    auto Resolve(resource::PipelineHandle handle) const -> Option<Arc<PipelineResourceEntry>> {
         auto entry = m_handles.get(handle);
         if (entry.is_none()) return None();
         auto resource = (**entry).upgrade();
@@ -791,24 +779,21 @@ public:
 
 private:
     struct Entry {
-        rstd::sync::Arc<PipelineResourceEntry> pipeline;
-        resource::PipelineHandle               handle;
-        resource::RenderPassHandle             render_pass;
-        rstd::sync::Arc<vvk::RenderPass>       render_pass_physical;
-        RenderPassCacheKey                     render_pass_key;
-        u64                                    observed_count { 0 };
+        Arc<PipelineResourceEntry> pipeline;
+        resource::PipelineHandle   handle;
+        resource::RenderPassHandle render_pass;
+        Arc<vvk::RenderPass>       render_pass_physical;
+        RenderPassCacheKey         render_pass_key;
+        u64                        observed_count { 0 };
     };
 
     auto NextHandle() -> resource::PipelineHandle {
         return { .index = m_next_index++, .generation = m_generation };
     }
 
-    using HandleMap = rstd::collections::HashMap<resource::PipelineHandle,
-                                                 rstd::sync::Weak<PipelineResourceEntry>>;
+    using HandleMap = HashMap<resource::PipelineHandle, Weak<PipelineResourceEntry>>;
 
-    rstd::collections::HashMap<PipelineCacheKey, Entry, rstd::hash::RandomState,
-                               PipelineCacheKeyEqual>
-              m_entries;
+    HashMap<PipelineCacheKey, Entry, rstd::hash::RandomState, PipelineCacheKeyEqual> m_entries;
     u64       m_generation { 1 };
     u64       m_next_index { 0 };
     HandleMap m_handles;
@@ -829,7 +814,7 @@ public:
 
     auto CreateFramebuffer(const FramebufferResourceRequest& request)
         -> Option<FramebufferResourceResult> {
-        if (request.render_pass == VK_NULL_HANDLE || request.attachments.empty()) {
+        if (request.render_pass == VK_NULL_HANDLE || request.attachments.is_empty()) {
             return None();
         }
         m_diagnostics->Record(MakeFramebufferCacheKey(request));
@@ -857,7 +842,7 @@ public:
 
     auto CreateGraphicsPipeline(PipelineResourceRequest request) -> Option<PipelineResourceResult> {
         return m_pipeline_cache->Ensure(
-            *m_device, std::move(request), *m_render_pass_cache, *m_pipeline_layouts);
+            *m_device, rstd::move(request), *m_render_pass_cache, *m_pipeline_layouts);
     }
 
 private:

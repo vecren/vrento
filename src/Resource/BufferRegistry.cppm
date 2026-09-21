@@ -1,12 +1,14 @@
 module;
 
 #include <cstdint>
-#include <span>
 
 export module vrento.resource_registry:buffer_registry;
 import rstd;
 import vrento.resource;
 import vrento.vulkan;
+
+using rstd::collections::HashMap;
+using rstd::sync::Arc;
 
 export namespace vrento::resource_registry
 {
@@ -35,13 +37,13 @@ struct BufferPhysical {
 };
 
 struct PendingBufferUpload {
-    rstd::sync::Arc<BufferPhysical> physical;
-    u64                             source_generation { 0 };
+    Arc<BufferPhysical> physical;
+    u64                 source_generation { 0 };
 };
 
 struct PreparedBuffer {
-    resource::BufferHandle          resource;
-    rstd::sync::Arc<BufferPhysical> physical;
+    resource::BufferHandle resource;
+    Arc<BufferPhysical>    physical;
 
     auto clone() const -> PreparedBuffer {
         return PreparedBuffer {
@@ -103,7 +105,7 @@ public:
         }
 
         u64  physical_generation = existing.is_some() ? (**existing)->generation + u64(1) : u64(1);
-        auto physical            = rstd::sync::Arc<BufferPhysical>::make(
+        auto physical            = Arc<BufferPhysical>::make(
             rstd::move(*allocated), physical_generation, (**entry).definition_version);
         auto queued = QueueWrite(physical.clone(), content, request.content_version, backend);
         if (queued.is_err()) return Err(rstd::move(queued).unwrap_err_unchecked());
@@ -114,7 +116,7 @@ public:
         });
     }
 
-    auto Resolve(resource::BufferHandle handle) const -> Option<rstd::sync::Arc<BufferPhysical>> {
+    auto Resolve(resource::BufferHandle handle) const -> Option<Arc<BufferPhysical>> {
         auto physical = m_resources.get(handle);
         if (physical.is_none()) return None();
         return Some((**physical).clone());
@@ -145,8 +147,8 @@ public:
         return Ok(empty {});
     }
 
-    void MarkUploadsSubmitted(std::span<const vulkan::BufferUploadTicket> tickets,
-                              Option<resource::ReadyToken>                ready) {
+    void MarkUploadsSubmitted(slice<vulkan::BufferUploadTicket> tickets,
+                              Option<resource::ReadyToken>      ready) {
         for (const auto& ticket : tickets) {
             auto pending = m_pending_uploads.remove(ticket.value);
             if (pending.is_none()) continue;
@@ -156,10 +158,9 @@ public:
     }
 
     void EvictUnused() {
-        m_resources.retain(
-            [](const resource::BufferHandle&, rstd::sync::Arc<BufferPhysical>& value) {
-                return value.strong_count() > usize(1);
-            });
+        m_resources.retain([](const resource::BufferHandle&, Arc<BufferPhysical>& value) {
+            return value.strong_count() > usize(1);
+        });
     }
 
     void Reset() {
@@ -175,8 +176,8 @@ public:
     auto Size() const noexcept -> usize { return m_entries.len(); }
 
 private:
-    auto QueueWrite(rstd::sync::Arc<BufferPhysical> physical, slice<u8> content,
-                    u64 source_generation, mut_ref<dyn<vulkan::BufferBackend>> backend)
+    auto QueueWrite(Arc<BufferPhysical> physical, slice<u8> content, u64 source_generation,
+                    mut_ref<dyn<vulkan::BufferBackend>> backend)
         -> Result<empty, resource::ResourceError> {
         if (physical->source_generation == source_generation) return Ok(empty {});
         auto allocation =
@@ -245,14 +246,14 @@ private:
     }
 
     template<typename Value>
-    using HandleMap = rstd::collections::HashMap<resource::BufferHandle, Value>;
+    using HandleMap = HashMap<resource::BufferHandle, Value>;
 
-    u64                                                        m_generation { 1 };
-    u64                                                        m_next_index { 0 };
-    HandleMap<BufferEntry>                                     m_entries;
-    HandleMap<rstd::sync::Arc<BufferPhysical>>                 m_resources;
-    rstd::collections::HashMap<String, resource::BufferHandle> m_names;
-    rstd::collections::HashMap<u64, PendingBufferUpload>       m_pending_uploads;
+    u64                                     m_generation { 1 };
+    u64                                     m_next_index { 0 };
+    HandleMap<BufferEntry>                  m_entries;
+    HandleMap<Arc<BufferPhysical>>          m_resources;
+    HashMap<String, resource::BufferHandle> m_names;
+    HashMap<u64, PendingBufferUpload>       m_pending_uploads;
 };
 
 } // namespace vrento::resource_registry

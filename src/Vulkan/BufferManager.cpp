@@ -5,10 +5,13 @@ module;
 
 module vrento.vulkan;
 
-import rstd.cppstd;
+import rstd;
 import rstd.log;
 
 using namespace rstd::prelude;
+using rstd::cmp::max;
+using rstd::cmp::min;
+using rstd::sync::Arc;
 
 namespace vrento::vulkan
 {
@@ -58,10 +61,10 @@ VkPipelineStageFlags DestinationStages(BufferUploadClass usage) {
 
 class BufferPage {
 public:
-    static std::shared_ptr<BufferPage> Create(const Device& device, VkDeviceSize size) {
-        auto page = std::shared_ptr<BufferPage>(new BufferPage(device, size));
-        if (! page->Initialize()) return {};
-        return page;
+    static Option<Arc<BufferPage>> Create(const Device& device, VkDeviceSize size) {
+        auto page = Arc<BufferPage>::make(device, size);
+        if (! page->Initialize()) return None();
+        return Some(rstd::move(page));
     }
 
     bool TryAllocate(VkDeviceSize size, VkDeviceSize alignment, alloc::RangeId& allocation,
@@ -80,10 +83,10 @@ public:
     VkDeviceSize size() const noexcept { return m_size; }
     bool         empty() const noexcept { return m_ranges.counters().allocation_count == 0; }
 
-private:
     BufferPage(const Device& device, VkDeviceSize size)
         : m_device(device), m_size(size), m_ranges(size) {}
 
+private:
     bool Initialize() {
         VkBufferCreateInfo buffer_info {
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -111,10 +114,10 @@ private:
 
 class UploadBlock {
 public:
-    static std::shared_ptr<UploadBlock> Create(const Device& device, VkDeviceSize size) {
-        auto block = std::shared_ptr<UploadBlock>(new UploadBlock(device, size));
-        if (! block->Initialize()) return {};
-        return block;
+    static Option<Arc<UploadBlock>> Create(const Device& device, VkDeviceSize size) {
+        auto block = Arc<UploadBlock>::make(device, size);
+        if (! block->Initialize()) return None();
+        return Some(rstd::move(block));
     }
 
     void Reset() {
@@ -131,11 +134,12 @@ public:
         return true;
     }
 
-    void Write(VkDeviceSize offset, std::span<const rstd::uint8_t> data) {
+    void Write(VkDeviceSize offset, slice<rstd::uint8_t> data) {
         auto* bytes = static_cast<rstd::uint8_t*>(m_mapping->data());
-        std::memcpy(bytes + offset, data.data(), data.size());
-        m_touched_begin = std::min(m_touched_begin, offset);
-        m_touched_end   = std::max(m_touched_end, offset + static_cast<VkDeviceSize>(data.size()));
+        rstd::mem::memcpy(bytes + offset, data.as_raw_ptr(), data.len());
+        m_touched_begin = min(m_touched_begin, offset);
+        m_touched_end =
+            max(m_touched_end, offset + static_cast<VkDeviceSize>(data.len().to_primitive()));
     }
 
     bool Flush() const {
@@ -155,9 +159,9 @@ public:
     VkBuffer     handle() const noexcept { return m_buffer.handle.handle(); }
     VkDeviceSize size() const noexcept { return m_size; }
 
-private:
     UploadBlock(const Device& device, VkDeviceSize size): m_device(device), m_size(size) {}
 
+private:
     bool Initialize() {
         if (! CreateStagingBuffer(m_device.memory_allocator(), m_size, m_buffer)) return false;
         auto mapped = m_buffer.handle.allocation().map();
@@ -183,111 +187,121 @@ private:
 };
 
 struct BufferCopyOperation {
-    std::shared_ptr<void>        destination_lease;
-    std::shared_ptr<UploadBlock> source;
-    VkBuffer                     destination { VK_NULL_HANDLE };
-    VkDeviceSize                 source_offset { 0 };
-    VkDeviceSize                 destination_offset { 0 };
-    VkDeviceSize                 size { 0 };
-    BufferUploadClass            usage { BufferUploadClass::Vertex };
+    BufferAllocation  destination_lease;
+    Arc<UploadBlock>  source;
+    VkBuffer          destination { VK_NULL_HANDLE };
+    VkDeviceSize      source_offset { 0 };
+    VkDeviceSize      destination_offset { 0 };
+    VkDeviceSize      size { 0 };
+    BufferUploadClass usage { BufferUploadClass::Vertex };
 };
 
 struct ImageMipCopyOperation {
-    std::shared_ptr<UploadBlock> source;
-    VkDeviceSize                 source_offset { 0 };
-    VkExtent3D                   extent {};
-    rstd::uint32_t               mip_level { 0 };
+    Arc<UploadBlock> source;
+    VkDeviceSize     source_offset { 0 };
+    VkExtent3D       extent {};
+    rstd::uint32_t   mip_level { 0 };
 };
 
 struct ImageCopyOperation {
-    rstd::sync::Arc<TextureAllocation> destination_lease;
-    ImageParameters                    destination;
-    std::vector<ImageMipCopyOperation> mipmaps;
+    Arc<TextureAllocation>     destination_lease;
+    ImageParameters            destination;
+    Vec<ImageMipCopyOperation> mipmaps;
 };
 
 struct ImageClearOperation {
-    rstd::sync::Arc<TextureAllocation> destination_lease;
-    ImageParameters                    destination;
+    Arc<TextureAllocation> destination_lease;
+    ImageParameters        destination;
 };
 
 } // namespace
 
 struct BufferAllocation::State {
-    std::shared_ptr<BufferPage> page;
-    alloc::RangeId              allocation {};
-    VkDeviceSize                offset { 0 };
-    VkDeviceSize                size { 0 };
-    BufferUploadClass           usage { BufferUploadClass::Vertex };
+    Option<Arc<BufferPage>> page;
+    alloc::RangeId          allocation {};
+    VkDeviceSize            offset { 0 };
+    VkDeviceSize            size { 0 };
+    BufferUploadClass       usage { BufferUploadClass::Vertex };
 
     ~State() {
-        if (page) page->Release(allocation);
+        if (page) (*page)->Release(allocation);
     }
 };
 
 struct RecordedBufferUploads::State {
-    u64                                       serial { 0 };
-    bool                                      recorded { false };
-    std::vector<BufferCopyOperation>          copies;
-    std::vector<std::shared_ptr<UploadBlock>> blocks;
-    std::vector<BufferUploadTicket>           tickets;
+    u64                      serial { 0 };
+    bool                     recorded { false };
+    Vec<BufferCopyOperation> copies;
+    Vec<Arc<UploadBlock>>    blocks;
+    Vec<BufferUploadTicket>  tickets;
 };
 
 struct RecordedImageUploads::State {
-    u64                                       serial { 0 };
-    bool                                      recorded { false };
-    std::vector<ImageCopyOperation>           copies;
-    std::vector<ImageClearOperation>          clears;
-    std::vector<std::shared_ptr<UploadBlock>> blocks;
-    std::vector<ImageUploadTicket>            tickets;
+    u64                      serial { 0 };
+    bool                     recorded { false };
+    Vec<ImageCopyOperation>  copies;
+    Vec<ImageClearOperation> clears;
+    Vec<Arc<UploadBlock>>    blocks;
+    Vec<ImageUploadTicket>   tickets;
 };
 
 struct BufferManager::Impl {
     explicit Impl(const Device& value): device(value) {}
 
-    const Device&                                 device;
-    bool                                          initialized { false };
-    u64                                           next_ticket { 0 };
-    u64                                           next_batch { 0 };
-    std::vector<std::shared_ptr<BufferPage>>      pages;
-    std::vector<std::shared_ptr<UploadBlock>>     upload_blocks;
-    std::shared_ptr<RecordedBufferUploads::State> pending;
+    const Device&                             device;
+    bool                                      initialized { false };
+    u64                                       next_ticket { 0 };
+    u64                                       next_batch { 0 };
+    Vec<Arc<BufferPage>>                      pages;
+    Vec<Arc<UploadBlock>>                     upload_blocks;
+    Option<Arc<RecordedBufferUploads::State>> pending;
 };
 
 struct ImageUploadManager::Impl {
     explicit Impl(const Device& value): device(value) {}
 
-    const Device&                                device;
-    bool                                         initialized { false };
-    u64                                          next_ticket { 0 };
-    u64                                          next_batch { 0 };
-    std::vector<std::shared_ptr<UploadBlock>>    upload_blocks;
-    std::shared_ptr<RecordedImageUploads::State> pending;
+    const Device&                            device;
+    bool                                     initialized { false };
+    u64                                      next_ticket { 0 };
+    u64                                      next_batch { 0 };
+    Vec<Arc<UploadBlock>>                    upload_blocks;
+    Option<Arc<RecordedImageUploads::State>> pending;
 };
 
-BufferAllocation::BufferAllocation(std::shared_ptr<State> state): m_state(std::move(state)) {}
-BufferAllocation::~BufferAllocation()                                      = default;
-BufferAllocation::BufferAllocation(BufferAllocation&&) noexcept            = default;
-BufferAllocation& BufferAllocation::operator=(BufferAllocation&&) noexcept = default;
+BufferAllocation::BufferAllocation()             = default;
+RecordedBufferUploads::RecordedBufferUploads()   = default;
+RecordedImageUploads::RecordedImageUploads()     = default;
+BufferUploadBatchLease::BufferUploadBatchLease() = default;
+ImageUploadBatchLease::ImageUploadBatchLease()   = default;
+
+BufferAllocation::BufferAllocation(Arc<State> state): m_state(Some(rstd::move(state))) {}
+BufferAllocation::~BufferAllocation() = default;
+BufferAllocation::BufferAllocation(BufferAllocation&& other) noexcept
+    : m_state(other.m_state.take()) {}
+BufferAllocation& BufferAllocation::operator=(BufferAllocation&& other) noexcept {
+    if (this != &other) m_state = other.m_state.take();
+    return *this;
+}
 
 BufferAllocation::operator bool() const noexcept {
-    return m_state && m_state->page && m_state->size > 0;
+    return m_state && (*m_state)->page && (*m_state)->size > 0;
 }
 
 VkBuffer BufferAllocation::buffer() const noexcept {
-    return m_state && m_state->page ? m_state->page->handle() : VK_NULL_HANDLE;
+    return m_state && (*m_state)->page ? (*(*m_state)->page)->handle() : VK_NULL_HANDLE;
 }
 
-VkDeviceSize BufferAllocation::offset() const noexcept { return m_state ? m_state->offset : 0; }
+VkDeviceSize BufferAllocation::offset() const noexcept { return m_state ? (*m_state)->offset : 0; }
 
-VkDeviceSize BufferAllocation::size() const noexcept { return m_state ? m_state->size : 0; }
+VkDeviceSize BufferAllocation::size() const noexcept { return m_state ? (*m_state)->size : 0; }
 
-RecordedBufferUploads::RecordedBufferUploads(BufferManager* owner, std::shared_ptr<State> state)
-    : m_owner(owner), m_state(std::move(state)) {}
+RecordedBufferUploads::RecordedBufferUploads(BufferManager* owner, Arc<State> state)
+    : m_owner(owner), m_state(Some(rstd::move(state))) {}
 
 RecordedBufferUploads::~RecordedBufferUploads() { Reset(); }
 
 RecordedBufferUploads::RecordedBufferUploads(RecordedBufferUploads&& other) noexcept
-    : m_owner(other.m_owner), m_state(std::move(other.m_state)) {
+    : m_owner(other.m_owner), m_state(other.m_state.take()) {
     other.m_owner = nullptr;
 }
 
@@ -295,7 +309,7 @@ RecordedBufferUploads& RecordedBufferUploads::operator=(RecordedBufferUploads&& 
     if (this == &other) return *this;
     Reset();
     m_owner       = other.m_owner;
-    m_state       = std::move(other.m_state);
+    m_state       = other.m_state.take();
     other.m_owner = nullptr;
     return *this;
 }
@@ -303,28 +317,28 @@ RecordedBufferUploads& RecordedBufferUploads::operator=(RecordedBufferUploads&& 
 bool RecordedBufferUploads::Valid() const noexcept { return m_owner != nullptr && m_state; }
 
 void RecordedBufferUploads::Reset() {
-    if (m_owner && m_state) m_owner->CancelRecordedUploads(m_state);
+    if (m_owner && m_state) m_owner->CancelRecordedUploads(*m_state);
     m_owner = nullptr;
-    m_state.reset();
+    m_state = None();
 }
 
-BufferUploadBatchLease::BufferUploadBatchLease(std::shared_ptr<RecordedBufferUploads::State> state)
-    : m_state(std::move(state)) {}
+BufferUploadBatchLease::BufferUploadBatchLease(Arc<RecordedBufferUploads::State> state)
+    : m_state(Some(rstd::move(state))) {}
 
 BufferUploadBatchLease::~BufferUploadBatchLease() = default;
 BufferUploadBatchLease::BufferUploadBatchLease(BufferUploadBatchLease&& other) noexcept
-    : m_state(std::move(other.m_state)) {}
+    : m_state(other.m_state.take()) {}
 
 BufferUploadBatchLease& BufferUploadBatchLease::operator=(BufferUploadBatchLease&& other) noexcept {
-    if (this != &other) m_state = std::move(other.m_state);
+    if (this != &other) m_state = other.m_state.take();
     return *this;
 }
 
 bool BufferUploadBatchLease::Valid() const noexcept { return static_cast<bool>(m_state); }
 
-std::span<const BufferUploadTicket> BufferUploadBatchLease::Tickets() const noexcept {
-    if (! m_state) return {};
-    return m_state->tickets;
+slice<BufferUploadTicket> BufferUploadBatchLease::Tickets() const noexcept {
+    if (! m_state) return slice<BufferUploadTicket>();
+    return (*m_state)->tickets.as_slice();
 }
 
 BufferManager::BufferManager(const Device& device): m_impl(Box<Impl>::make(device)) {}
@@ -337,7 +351,7 @@ bool BufferManager::init() {
 
 void BufferManager::destroy() {
     if (! m_impl->initialized) return;
-    m_impl->pending.reset();
+    m_impl->pending = None();
     m_impl->upload_blocks.clear();
     m_impl->pages.clear();
     m_impl->initialized = false;
@@ -346,19 +360,19 @@ void BufferManager::destroy() {
 Option<BufferAllocation> BufferManager::Allocate(const BufferAllocationRequest& request) {
     if (! m_impl->initialized || request.size == 0) return None();
 
-    VkDeviceSize alignment = std::max<VkDeviceSize>(request.alignment, 4);
+    VkDeviceSize alignment = max<VkDeviceSize>(request.alignment, 4);
     if (request.usage == BufferUploadClass::Uniform) {
-        alignment = std::max(alignment, m_impl->device.limits().minUniformBufferOffsetAlignment);
+        alignment = max(alignment, m_impl->device.limits().minUniformBufferOffsetAlignment);
     } else if (request.usage == BufferUploadClass::Storage) {
-        alignment = std::max(alignment, m_impl->device.limits().minStorageBufferOffsetAlignment);
+        alignment = max(alignment, m_impl->device.limits().minStorageBufferOffsetAlignment);
     }
 
-    alloc::RangeId              allocation {};
-    VkDeviceSize                offset { 0 };
-    std::shared_ptr<BufferPage> page;
+    alloc::RangeId          allocation {};
+    VkDeviceSize            offset { 0 };
+    Option<Arc<BufferPage>> page;
     for (const auto& candidate : m_impl->pages) {
         if (candidate->TryAllocate(request.size, alignment, allocation, offset)) {
-            page = candidate;
+            page = Some(candidate.clone());
             break;
         }
     }
@@ -367,32 +381,33 @@ Option<BufferAllocation> BufferManager::Allocate(const BufferAllocationRequest& 
                                    ? AlignUp(request.size, kLargeAlignment)
                                    : kBufferPageSize;
         page                 = BufferPage::Create(m_impl->device, page_size);
-        if (! page || ! page->TryAllocate(request.size, alignment, allocation, offset)) {
+        if (! page || ! (*page)->TryAllocate(request.size, alignment, allocation, offset)) {
             return None();
         }
-        m_impl->pages.push_back(page);
+        m_impl->pages.push(page->clone());
         rstd_info(
-            "new destination buffer page, size: {}, pages: {}", page_size, m_impl->pages.size());
+            "new destination buffer page, size: {}, pages: {}", page_size, m_impl->pages.len());
     }
 
-    auto state        = std::make_shared<BufferAllocation::State>();
-    state->page       = std::move(page);
+    auto state        = Arc<BufferAllocation::State>::make();
+    state->page       = rstd::move(page);
     state->allocation = allocation;
     state->offset     = offset;
     state->size       = request.size;
     state->usage      = request.usage;
-    return Some(BufferAllocation(std::move(state)));
+    return Some(BufferAllocation(rstd::move(state)));
 }
 
-Option<BufferUploadTicket> BufferManager::QueueWrite(BufferAllocation&              allocation,
-                                                     std::span<const rstd::uint8_t> data,
-                                                     VkDeviceSize destination_offset) {
+Option<BufferUploadTicket> BufferManager::QueueWrite(BufferAllocation&    allocation,
+                                                     slice<rstd::uint8_t> data,
+                                                     VkDeviceSize         destination_offset) {
     if (! m_impl->initialized || ! allocation || destination_offset > allocation.size() ||
-        static_cast<VkDeviceSize>(data.size()) > allocation.size() - destination_offset) {
+        static_cast<VkDeviceSize>(data.len().to_primitive()) >
+            allocation.size() - destination_offset) {
         return None();
     }
-    if (data.empty()) return Some(BufferUploadTicket {});
-    if (m_impl->pending && m_impl->pending->recorded) {
+    if (data.is_empty()) return Some(BufferUploadTicket {});
+    if (m_impl->pending && (*m_impl->pending)->recorded) {
         rstd_error("queue buffer write while the pending upload batch is recorded");
         return None();
     }
@@ -400,25 +415,26 @@ Option<BufferUploadTicket> BufferManager::QueueWrite(BufferAllocation&          
     if (! m_impl->pending) {
         ++m_impl->next_batch;
         if (m_impl->next_batch == u64()) ++m_impl->next_batch;
-        m_impl->pending         = std::make_shared<RecordedBufferUploads::State>();
-        m_impl->pending->serial = m_impl->next_batch;
+        m_impl->pending            = Some(Arc<RecordedBufferUploads::State>::make());
+        (*m_impl->pending)->serial = m_impl->next_batch;
     }
 
-    VkDeviceSize                 upload_offset { 0 };
-    std::shared_ptr<UploadBlock> block;
-    for (const auto& candidate : m_impl->pending->blocks) {
-        if (candidate->TryAllocate(static_cast<VkDeviceSize>(data.size()), 4, upload_offset)) {
-            block = candidate;
+    VkDeviceSize             upload_offset { 0 };
+    Option<Arc<UploadBlock>> block;
+    for (const auto& candidate : (*m_impl->pending)->blocks) {
+        if (candidate->TryAllocate(
+                static_cast<VkDeviceSize>(data.len().to_primitive()), 4, upload_offset)) {
+            block = Some(candidate.clone());
             break;
         }
     }
     if (! block) {
-        const auto required = static_cast<VkDeviceSize>(data.size());
+        const auto required = static_cast<VkDeviceSize>(data.len().to_primitive());
         for (const auto& candidate : m_impl->upload_blocks) {
-            if (candidate.use_count() != 1 || candidate->size() < required) continue;
+            if (candidate.strong_count() != usize(1) || candidate->size() < required) continue;
             candidate->Reset();
             if (candidate->TryAllocate(required, 4, upload_offset)) {
-                block = candidate;
+                block = Some(candidate.clone());
                 break;
             }
         }
@@ -426,47 +442,48 @@ Option<BufferUploadTicket> BufferManager::QueueWrite(BufferAllocation&          
             const auto block_size =
                 required > kUploadBlockSize ? AlignUp(required, kLargeAlignment) : kUploadBlockSize;
             block = UploadBlock::Create(m_impl->device, block_size);
-            if (! block || ! block->TryAllocate(required, 4, upload_offset)) return None();
-            m_impl->upload_blocks.push_back(block);
+            if (! block || ! (*block)->TryAllocate(required, 4, upload_offset)) return None();
+            m_impl->upload_blocks.push(block->clone());
             rstd_info("new upload buffer block, size: {}, blocks: {}",
                       block_size,
-                      m_impl->upload_blocks.size());
+                      m_impl->upload_blocks.len());
         }
-        m_impl->pending->blocks.push_back(block);
+        (*m_impl->pending)->blocks.push(block->clone());
     }
 
-    block->Write(upload_offset, data);
+    (*block)->Write(upload_offset, data);
     ++m_impl->next_ticket;
     if (m_impl->next_ticket == u64()) ++m_impl->next_ticket;
     BufferUploadTicket ticket { .value = m_impl->next_ticket };
-    m_impl->pending->copies.push_back(BufferCopyOperation {
-        .destination_lease  = allocation.m_state,
-        .source             = std::move(block),
-        .destination        = allocation.buffer(),
-        .source_offset      = upload_offset,
-        .destination_offset = allocation.offset() + destination_offset,
-        .size               = static_cast<VkDeviceSize>(data.size()),
-        .usage              = allocation.m_state->usage,
-    });
-    m_impl->pending->tickets.push_back(ticket);
+    (*m_impl->pending)
+        ->copies.push(BufferCopyOperation {
+            .destination_lease  = BufferAllocation(allocation.m_state->clone()),
+            .source             = block.take().unwrap(),
+            .destination        = allocation.buffer(),
+            .source_offset      = upload_offset,
+            .destination_offset = allocation.offset() + destination_offset,
+            .size               = static_cast<VkDeviceSize>(data.len().to_primitive()),
+            .usage              = (*allocation.m_state)->usage,
+        });
+    (*m_impl->pending)->tickets.push(decltype(ticket)(ticket));
     return Some(ticket);
 }
 
 bool BufferManager::HasPendingUploads() const noexcept {
-    return m_impl->pending && ! m_impl->pending->copies.empty();
+    return m_impl->pending && ! (*m_impl->pending)->copies.is_empty();
 }
 
 bool BufferManager::RecordPendingUploads(vvk::CommandBuffer& cmd, RecordedBufferUploads& recorded) {
     recorded.Reset();
     if (! HasPendingUploads()) return true;
-    if (m_impl->pending->recorded) {
+    if ((*m_impl->pending)->recorded) {
         rstd_error("buffer upload batch is already recorded");
         return false;
     }
-    for (const auto& block : m_impl->pending->blocks) {
+    for (const auto& block : (*m_impl->pending)->blocks) {
         if (! block->Flush()) return false;
     }
-    for (const auto& copy : m_impl->pending->copies) {
+    for (const auto& copy : (*m_impl->pending)->copies) {
         cmd.CopyBuffer(copy.source->handle(),
                        copy.destination,
                        VkBufferCopy {
@@ -475,7 +492,7 @@ bool BufferManager::RecordPendingUploads(vvk::CommandBuffer& cmd, RecordedBuffer
                            .size      = copy.size,
                        });
     }
-    for (const auto& copy : m_impl->pending->copies) {
+    for (const auto& copy : (*m_impl->pending)->copies) {
         VkBufferMemoryBarrier barrier {
             .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -491,64 +508,59 @@ bool BufferManager::RecordPendingUploads(vvk::CommandBuffer& cmd, RecordedBuffer
                             VK_DEPENDENCY_BY_REGION_BIT,
                             barrier);
     }
-    m_impl->pending->recorded = true;
-    recorded                  = RecordedBufferUploads(this, m_impl->pending);
+    (*m_impl->pending)->recorded = true;
+    recorded                     = RecordedBufferUploads(this, m_impl->pending->clone());
     return true;
 }
 
 Option<BufferUploadBatchLease>
 BufferManager::CommitRecordedUploads(RecordedBufferUploads&& recorded) {
-    if (! recorded.Valid() || recorded.m_owner != this || recorded.m_state != m_impl->pending ||
-        ! recorded.m_state->recorded) {
+    if (! recorded.Valid() || recorded.m_owner != this || ! m_impl->pending ||
+        ! Arc<RecordedBufferUploads::State>::ptr_eq(*recorded.m_state, *m_impl->pending) ||
+        ! (*recorded.m_state)->recorded) {
         return None();
     }
-    auto state       = std::move(recorded.m_state);
+    auto state       = recorded.m_state.take().unwrap();
     recorded.m_owner = nullptr;
     state->recorded  = false;
-    m_impl->pending.reset();
-    return Some(BufferUploadBatchLease(std::move(state)));
+    m_impl->pending  = None();
+    return Some(BufferUploadBatchLease(rstd::move(state)));
 }
 
-void BufferManager::CancelRecordedUploads(
-    const std::shared_ptr<RecordedBufferUploads::State>& state) {
-    if (state && state == m_impl->pending) state->recorded = false;
+void BufferManager::CancelRecordedUploads(const Arc<RecordedBufferUploads::State>& state) {
+    if (m_impl->pending && Arc<RecordedBufferUploads::State>::ptr_eq(state, *m_impl->pending))
+        state->recorded = false;
 }
 
 void BufferManager::Trim() {
     bool kept_empty_page = false;
-    m_impl->pages.erase(std::remove_if(m_impl->pages.begin(),
-                                       m_impl->pages.end(),
-                                       [&kept_empty_page](const auto& page) {
-                                           if (! page->empty()) return false;
-                                           if (! kept_empty_page) {
-                                               kept_empty_page = true;
-                                               return false;
-                                           }
-                                           return page.use_count() == 1;
-                                       }),
-                        m_impl->pages.end());
+    m_impl->pages.retain([&](const auto& page) {
+        if (! page->empty()) return true;
+        if (! kept_empty_page) {
+            kept_empty_page = true;
+            return true;
+        }
+        return page.strong_count() != usize(1);
+    });
 
     bool kept_upload_block = false;
-    m_impl->upload_blocks.erase(std::remove_if(m_impl->upload_blocks.begin(),
-                                               m_impl->upload_blocks.end(),
-                                               [&kept_upload_block](const auto& block) {
-                                                   if (block.use_count() != 1) return false;
-                                                   if (! kept_upload_block) {
-                                                       kept_upload_block = true;
-                                                       return false;
-                                                   }
-                                                   return true;
-                                               }),
-                                m_impl->upload_blocks.end());
+    m_impl->upload_blocks.retain([&](const auto& block) {
+        if (block.strong_count() != usize(1)) return true;
+        if (! kept_upload_block) {
+            kept_upload_block = true;
+            return true;
+        }
+        return false;
+    });
 }
 
-RecordedImageUploads::RecordedImageUploads(ImageUploadManager* owner, std::shared_ptr<State> state)
-    : m_owner(owner), m_state(std::move(state)) {}
+RecordedImageUploads::RecordedImageUploads(ImageUploadManager* owner, Arc<State> state)
+    : m_owner(owner), m_state(Some(rstd::move(state))) {}
 
 RecordedImageUploads::~RecordedImageUploads() { Reset(); }
 
 RecordedImageUploads::RecordedImageUploads(RecordedImageUploads&& other) noexcept
-    : m_owner(other.m_owner), m_state(std::move(other.m_state)) {
+    : m_owner(other.m_owner), m_state(other.m_state.take()) {
     other.m_owner = nullptr;
 }
 
@@ -556,7 +568,7 @@ RecordedImageUploads& RecordedImageUploads::operator=(RecordedImageUploads&& oth
     if (this == &other) return *this;
     Reset();
     m_owner       = other.m_owner;
-    m_state       = std::move(other.m_state);
+    m_state       = other.m_state.take();
     other.m_owner = nullptr;
     return *this;
 }
@@ -564,28 +576,28 @@ RecordedImageUploads& RecordedImageUploads::operator=(RecordedImageUploads&& oth
 bool RecordedImageUploads::Valid() const noexcept { return m_owner != nullptr && m_state; }
 
 void RecordedImageUploads::Reset() {
-    if (m_owner && m_state) m_owner->CancelRecordedUploads(m_state);
+    if (m_owner && m_state) m_owner->CancelRecordedUploads(*m_state);
     m_owner = nullptr;
-    m_state.reset();
+    m_state = None();
 }
 
-ImageUploadBatchLease::ImageUploadBatchLease(std::shared_ptr<RecordedImageUploads::State> state)
-    : m_state(std::move(state)) {}
+ImageUploadBatchLease::ImageUploadBatchLease(Arc<RecordedImageUploads::State> state)
+    : m_state(Some(rstd::move(state))) {}
 
 ImageUploadBatchLease::~ImageUploadBatchLease() = default;
 ImageUploadBatchLease::ImageUploadBatchLease(ImageUploadBatchLease&& other) noexcept
-    : m_state(std::move(other.m_state)) {}
+    : m_state(other.m_state.take()) {}
 
 ImageUploadBatchLease& ImageUploadBatchLease::operator=(ImageUploadBatchLease&& other) noexcept {
-    if (this != &other) m_state = std::move(other.m_state);
+    if (this != &other) m_state = other.m_state.take();
     return *this;
 }
 
 bool ImageUploadBatchLease::Valid() const noexcept { return static_cast<bool>(m_state); }
 
-std::span<const ImageUploadTicket> ImageUploadBatchLease::Tickets() const noexcept {
+slice<ImageUploadTicket> ImageUploadBatchLease::Tickets() const noexcept {
     if (! m_state) return {};
-    return m_state->tickets;
+    return (*m_state)->tickets.as_slice();
 }
 
 ImageUploadManager::ImageUploadManager(const Device& device): m_impl(Box<Impl>::make(device)) {}
@@ -598,62 +610,63 @@ bool ImageUploadManager::init() {
 
 void ImageUploadManager::destroy() {
     if (! m_impl->initialized) return;
-    m_impl->pending.reset();
+    m_impl->pending = None();
     m_impl->upload_blocks.clear();
     m_impl->initialized = false;
 }
 
-Option<ImageUploadTicket>
-ImageUploadManager::QueueWrite(rstd::sync::Arc<TextureAllocation> allocation, const Image& image) {
+Option<ImageUploadTicket> ImageUploadManager::QueueWrite(Arc<TextureAllocation> allocation,
+                                                         const Image&           image) {
     if (! m_impl->initialized || image.header.kind == ImageKind::Video) return None();
     auto destinations = allocation->View();
-    if (destinations.slots.size() != image.slots.size() || destinations.slots.empty()) {
+    if (destinations.slots.len() != image.slots.len() || destinations.slots.is_empty()) {
         return None();
     }
-    if (m_impl->pending && m_impl->pending->recorded) {
+    if (m_impl->pending && (*m_impl->pending)->recorded) {
         rstd_error("queue image write while the pending upload batch is recorded");
         return None();
     }
     if (! m_impl->pending) {
         ++m_impl->next_batch;
         if (m_impl->next_batch == u64()) ++m_impl->next_batch;
-        m_impl->pending         = std::make_shared<RecordedImageUploads::State>();
-        m_impl->pending->serial = m_impl->next_batch;
+        m_impl->pending            = Some(Arc<RecordedImageUploads::State>::make());
+        (*m_impl->pending)->serial = m_impl->next_batch;
     }
 
-    std::vector<ImageCopyOperation> operations;
-    operations.reserve(image.slots.size());
-    for (std::size_t slot_index = 0; slot_index < image.slots.size(); ++slot_index) {
+    Vec<ImageCopyOperation> operations;
+    operations.reserve(image.slots.len());
+    for (usize slot_index {}; slot_index < image.slots.len(); ++slot_index) {
         const auto& source_slot = image.slots[slot_index];
         const auto& destination = destinations.slots[slot_index];
-        if (! source_slot || source_slot.mipmaps.size() != destination.mipmap_level) return None();
+        if (! source_slot || source_slot.mipmaps.len() != usize(destination.mipmap_level))
+            return None();
 
         ImageCopyOperation operation {
             .destination_lease = allocation.clone(),
             .destination       = destination,
         };
-        operation.mipmaps.reserve(source_slot.mipmaps.size());
-        for (std::size_t mip_index = 0; mip_index < source_slot.mipmaps.size(); ++mip_index) {
+        operation.mipmaps.reserve(source_slot.mipmaps.len());
+        for (usize mip_index {}; mip_index < source_slot.mipmaps.len(); ++mip_index) {
             const auto& source = source_slot.mipmaps[mip_index];
             const auto  size   = static_cast<VkDeviceSize>(source.size.to_primitive());
-            if (size == 0 || source.data == nullptr || source.width <= 0 || source.height <= 0) {
+            if (size == 0 || ! source.data || source.width <= 0 || source.height <= 0) {
                 return None();
             }
 
-            VkDeviceSize                 upload_offset { 0 };
-            std::shared_ptr<UploadBlock> block;
-            for (const auto& candidate : m_impl->pending->blocks) {
+            VkDeviceSize             upload_offset { 0 };
+            Option<Arc<UploadBlock>> block;
+            for (const auto& candidate : (*m_impl->pending)->blocks) {
                 if (candidate->TryAllocate(size, 256, upload_offset)) {
-                    block = candidate;
+                    block = Some(candidate.clone());
                     break;
                 }
             }
             if (! block) {
                 for (const auto& candidate : m_impl->upload_blocks) {
-                    if (candidate.use_count() != 1 || candidate->size() < size) continue;
+                    if (candidate.strong_count() != usize(1) || candidate->size() < size) continue;
                     candidate->Reset();
                     if (candidate->TryAllocate(size, 256, upload_offset)) {
-                        block = candidate;
+                        block = Some(candidate.clone());
                         break;
                     }
                 }
@@ -661,86 +674,86 @@ ImageUploadManager::QueueWrite(rstd::sync::Arc<TextureAllocation> allocation, co
                     const auto block_size =
                         size > kUploadBlockSize ? AlignUp(size, kLargeAlignment) : kUploadBlockSize;
                     block = UploadBlock::Create(m_impl->device, block_size);
-                    if (! block || ! block->TryAllocate(size, 256, upload_offset)) return None();
-                    m_impl->upload_blocks.push_back(block);
+                    if (! block || ! (*block)->TryAllocate(size, 256, upload_offset)) return None();
+                    m_impl->upload_blocks.push(block->clone());
                     rstd_info("new image upload buffer block, size: {}, blocks: {}",
                               block_size,
-                              m_impl->upload_blocks.size());
+                              m_impl->upload_blocks.len());
                 }
-                m_impl->pending->blocks.push_back(block);
+                (*m_impl->pending)->blocks.push(block->clone());
             }
 
-            block->Write(
-                upload_offset,
-                std::span<const rstd::uint8_t>(source.data.get(), static_cast<std::size_t>(size)));
-            operation.mipmaps.push_back(ImageMipCopyOperation {
-                .source        = rstd::move(block),
+            (*block)->Write(upload_offset,
+                            slice<rstd::uint8_t>::from_raw_parts(source.data.get(), usize(size)));
+            operation.mipmaps.push(ImageMipCopyOperation {
+                .source        = block.take().unwrap(),
                 .source_offset = upload_offset,
                 .extent        = VkExtent3D { static_cast<rstd::uint32_t>(source.width),
                                               static_cast<rstd::uint32_t>(source.height),
                                               1 },
-                .mip_level     = static_cast<rstd::uint32_t>(mip_index),
+                .mip_level     = static_cast<rstd::uint32_t>(mip_index.to_primitive()),
             });
         }
-        operations.push_back(rstd::move(operation));
+        operations.push(rstd::move(operation));
     }
 
     for (auto& operation : operations) {
-        m_impl->pending->copies.push_back(rstd::move(operation));
+        (*m_impl->pending)->copies.push(rstd::move(operation));
     }
     ++m_impl->next_ticket;
     if (m_impl->next_ticket == u64()) ++m_impl->next_ticket;
     ImageUploadTicket ticket { .value = m_impl->next_ticket };
-    m_impl->pending->tickets.push_back(ticket);
+    (*m_impl->pending)->tickets.push(decltype(ticket)(ticket));
     return Some(ticket);
 }
 
 Option<ImageUploadTicket>
-ImageUploadManager::QueueTransparentClear(rstd::sync::Arc<TextureAllocation> allocation) {
+ImageUploadManager::QueueTransparentClear(Arc<TextureAllocation> allocation) {
     if (! m_impl->initialized) return None();
     auto destinations = allocation->View();
-    if (destinations.slots.empty()) return None();
-    if (m_impl->pending && m_impl->pending->recorded) {
+    if (destinations.slots.is_empty()) return None();
+    if (m_impl->pending && (*m_impl->pending)->recorded) {
         rstd_error("queue image clear while the pending upload batch is recorded");
         return None();
     }
     if (! m_impl->pending) {
         ++m_impl->next_batch;
         if (m_impl->next_batch == u64()) ++m_impl->next_batch;
-        m_impl->pending         = std::make_shared<RecordedImageUploads::State>();
-        m_impl->pending->serial = m_impl->next_batch;
+        m_impl->pending            = Some(Arc<RecordedImageUploads::State>::make());
+        (*m_impl->pending)->serial = m_impl->next_batch;
     }
     for (const auto& destination : destinations.slots) {
-        m_impl->pending->clears.push_back(ImageClearOperation {
-            .destination_lease = allocation.clone(),
-            .destination       = destination,
-        });
+        (*m_impl->pending)
+            ->clears.push(ImageClearOperation {
+                .destination_lease = allocation.clone(),
+                .destination       = destination,
+            });
     }
     ++m_impl->next_ticket;
     if (m_impl->next_ticket == u64()) ++m_impl->next_ticket;
     ImageUploadTicket ticket { .value = m_impl->next_ticket };
-    m_impl->pending->tickets.push_back(ticket);
+    (*m_impl->pending)->tickets.push(decltype(ticket)(ticket));
     return Some(ticket);
 }
 
 bool ImageUploadManager::HasPendingUploads() const noexcept {
     return m_impl->pending &&
-           (! m_impl->pending->copies.empty() || ! m_impl->pending->clears.empty());
+           (! (*m_impl->pending)->copies.is_empty() || ! (*m_impl->pending)->clears.is_empty());
 }
 
 bool ImageUploadManager::RecordPendingUploads(vvk::CommandBuffer&   command,
                                               RecordedImageUploads& recorded) {
     recorded.Reset();
     if (! HasPendingUploads()) return true;
-    if (m_impl->pending->recorded) {
+    if ((*m_impl->pending)->recorded) {
         rstd_error("image upload batch is already recorded");
         return false;
     }
-    for (const auto& block : m_impl->pending->blocks) {
+    for (const auto& block : (*m_impl->pending)->blocks) {
         if (! block->Flush()) return false;
     }
 
-    for (const auto& clear : m_impl->pending->clears) {
+    for (const auto& clear : (*m_impl->pending)->clears) {
         VkImageSubresourceRange range {
             .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel   = 0,
@@ -781,11 +794,11 @@ bool ImageUploadManager::RecordPendingUploads(vvk::CommandBuffer&   command,
                                 to_sampled);
     }
 
-    for (const auto& copy : m_impl->pending->copies) {
+    for (const auto& copy : (*m_impl->pending)->copies) {
         VkImageSubresourceRange range {
             .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel   = 0,
-            .levelCount     = static_cast<rstd::uint32_t>(copy.mipmaps.size()),
+            .levelCount     = static_cast<rstd::uint32_t>(copy.mipmaps.len().to_primitive()),
             .baseArrayLayer = 0,
             .layerCount     = 1,
         };
@@ -838,48 +851,46 @@ bool ImageUploadManager::RecordPendingUploads(vvk::CommandBuffer&   command,
                                 to_sampled);
     }
 
-    m_impl->pending->recorded = true;
-    recorded                  = RecordedImageUploads(this, m_impl->pending);
+    (*m_impl->pending)->recorded = true;
+    recorded                     = RecordedImageUploads(this, m_impl->pending->clone());
     return true;
 }
 
 auto ImageUploadManager::CommitRecordedUploads(RecordedImageUploads&& recorded)
     -> Option<ImageUploadBatchLease> {
-    if (! recorded.Valid() || recorded.m_owner != this || recorded.m_state != m_impl->pending ||
-        ! recorded.m_state->recorded) {
+    if (! recorded.Valid() || recorded.m_owner != this || ! m_impl->pending ||
+        ! Arc<RecordedImageUploads::State>::ptr_eq(*recorded.m_state, *m_impl->pending) ||
+        ! (*recorded.m_state)->recorded) {
         return None();
     }
-    auto state       = std::move(recorded.m_state);
+    auto state       = recorded.m_state.take().unwrap();
     recorded.m_owner = nullptr;
     state->recorded  = false;
-    m_impl->pending.reset();
-    return Some(ImageUploadBatchLease(std::move(state)));
+    m_impl->pending  = None();
+    return Some(ImageUploadBatchLease(rstd::move(state)));
 }
 
-void ImageUploadManager::CancelRecordedUploads(
-    const std::shared_ptr<RecordedImageUploads::State>& state) {
-    if (state && state == m_impl->pending) state->recorded = false;
+void ImageUploadManager::CancelRecordedUploads(const Arc<RecordedImageUploads::State>& state) {
+    if (m_impl->pending && Arc<RecordedImageUploads::State>::ptr_eq(state, *m_impl->pending))
+        state->recorded = false;
 }
 
-void ImageUploadManager::DiscardPendingUploads() { m_impl->pending.reset(); }
+void ImageUploadManager::DiscardPendingUploads() { m_impl->pending = None(); }
 
 void ImageUploadManager::Trim() {
     bool kept_upload_block = false;
-    m_impl->upload_blocks.erase(std::remove_if(m_impl->upload_blocks.begin(),
-                                               m_impl->upload_blocks.end(),
-                                               [&kept_upload_block](const auto& block) {
-                                                   if (block.use_count() != 1) return false;
-                                                   if (! kept_upload_block) {
-                                                       kept_upload_block = true;
-                                                       return false;
-                                                   }
-                                                   return true;
-                                               }),
-                                m_impl->upload_blocks.end());
+    m_impl->upload_blocks.retain([&](const auto& block) {
+        if (block.strong_count() != usize(1)) return true;
+        if (! kept_upload_block) {
+            kept_upload_block = true;
+            return true;
+        }
+        return false;
+    });
 }
 
-auto ImagePrepareContext::CreateImportedTexture(
-    ref<Image> image, Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
+auto ImagePrepareContext::CreateImportedTexture(ref<Image>                            image,
+                                                Option<Arc<rstd::dyn<VideoPlayback>>> playback)
     -> Option<PreparedImageAllocation> {
     auto allocation = m_textures.AllocateImportedTexture(*image, rstd::move(playback));
     if (allocation.is_none()) return None();
@@ -896,8 +907,7 @@ auto ImagePrepareContext::CreateImportedTexture(
     });
 }
 
-auto ImagePrepareContext::AllocateTexture(TextureKey key)
-    -> Option<rstd::sync::Arc<TextureAllocation>> {
+auto ImagePrepareContext::AllocateTexture(TextureKey key) -> Option<Arc<TextureAllocation>> {
     return m_textures.AllocateTexture(rstd::move(key));
 }
 

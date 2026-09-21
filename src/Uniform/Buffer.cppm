@@ -13,19 +13,19 @@ struct UniformBufferUpdateError {
 };
 
 struct UniformSlot {
-    String              name;
-    usize               offset { 0 };
-    usize               size { 0 };
-    usize               count { 1 };
-    ShaderScalarKind    scalar_kind { ShaderScalarKind::Unknown };
-    u32                 scalar_width {};
-    u32                 vector_components { u32(1) };
-    u32                 matrix_rows {};
-    u32                 matrix_columns {};
-    u32                 matrix_stride {};
-    ShaderMatrixMajor   matrix_major { ShaderMatrixMajor::None };
-    u32                 array_stride {};
-    rstd::vec::Vec<u32> array_dimensions;
+    String            name;
+    usize             offset { 0 };
+    usize             size { 0 };
+    usize             count { 1 };
+    ShaderScalarKind  scalar_kind { ShaderScalarKind::Unknown };
+    u32               scalar_width {};
+    u32               vector_components { u32(1) };
+    u32               matrix_rows {};
+    u32               matrix_columns {};
+    u32               matrix_stride {};
+    ShaderMatrixMajor matrix_major { ShaderMatrixMajor::None };
+    u32               array_stride {};
+    Vec<u32>          array_dimensions;
 
     usize LogicalFloatElements() const {
         if (scalar_kind == ShaderScalarKind::Unknown) return size / usize(sizeof(float));
@@ -37,8 +37,8 @@ struct UniformSlot {
 };
 
 struct UniformBufferLayout {
-    usize                       size { 0 };
-    rstd::vec::Vec<UniformSlot> slots;
+    usize            size { 0 };
+    Vec<UniformSlot> slots;
 };
 
 auto CompileUniformBufferLayout(const resource::ShaderArtifactUniformBlock&)

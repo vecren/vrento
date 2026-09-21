@@ -4,79 +4,115 @@ module;
 
 export module vrento.resource_registry:resource_key;
 import rstd;
-import rstd.cppstd;
 import vrento.resource;
 import vrento.shader_types;
 import vrento.vulkan;
 
 using namespace rstd::prelude;
+using namespace rstd::literals;
+using rstd::slice_::sort_unstable_by;
 
 export namespace vrento::vulkan
 {
 
 struct PipelineResourceRequest {
-    resource::PipelineLayoutHandle                 pipeline_layout;
-    std::vector<VkVertexInputBindingDescription>   vertex_bindings;
-    std::vector<VkVertexInputAttributeDescription> vertex_attrs;
-    std::vector<Uni_ShaderSpv>                     shader_stages;
-    VkPipelineColorBlendAttachmentState            color_blend {};
-    VkPipelineColorBlendStateCreateFlags           color_blend_flags { 0 };
-    rstd::array<float, 4>                          blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
-    VkPipelineDepthStencilStateCreateInfo          depth {};
-    VkPipelineRasterizationStateCreateInfo         raster {};
-    VkPipelineMultisampleStateCreateInfo           multisample {};
-    VkPipelineCreateFlags                          create_flags { 0 };
-    VkPrimitiveTopology         topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
-    uint32_t                    subpass { 0 };
-    bool                        primitive_restart_enable { false };
-    uint32_t                    viewport_count { 1 };
-    uint32_t                    scissor_count { 1 };
-    bool                        logic_op_enable { false };
-    VkLogicOp                   logic_op { VK_LOGIC_OP_COPY };
-    std::vector<VkDynamicState> dynamic_states { VK_DYNAMIC_STATE_VIEWPORT,
-                                                 VK_DYNAMIC_STATE_SCISSOR };
-    VkFormat                    color_format { VK_FORMAT_R8G8B8A8_UNORM };
-    VkImageLayout               color_initial_layout { VK_IMAGE_LAYOUT_UNDEFINED };
-    VkImageLayout               color_final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-    VkAttachmentLoadOp          color_load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
-    VkAttachmentLoadOp          depth_load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
-    VkAttachmentStoreOp         depth_store_op { VK_ATTACHMENT_STORE_OP_STORE };
-    VkImageLayout depth_final_layout { VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-    bool          has_color_attachment { true };
-    bool          has_depth_attachment { false };
+    resource::PipelineLayoutHandle         pipeline_layout;
+    Vec<VkVertexInputBindingDescription>   vertex_bindings;
+    Vec<VkVertexInputAttributeDescription> vertex_attrs;
+    Vec<Uni_ShaderSpv>                     shader_stages;
+    VkPipelineColorBlendAttachmentState    color_blend {};
+    VkPipelineColorBlendStateCreateFlags   color_blend_flags { 0 };
+    rstd::array<float, 4>                  blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
+    VkPipelineDepthStencilStateCreateInfo  depth {};
+    VkPipelineRasterizationStateCreateInfo raster {};
+    VkPipelineMultisampleStateCreateInfo   multisample {};
+    VkPipelineCreateFlags                  create_flags { 0 };
+    VkPrimitiveTopology                    topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
+    rstd::uint32_t                         subpass { 0 };
+    bool                                   primitive_restart_enable { false };
+    rstd::uint32_t                         viewport_count { 1 };
+    rstd::uint32_t                         scissor_count { 1 };
+    bool                                   logic_op_enable { false };
+    VkLogicOp                              logic_op { VK_LOGIC_OP_COPY };
+    Vec<VkDynamicState>                    dynamic_states = Vec<VkDynamicState>::from(
+        rstd::array<VkDynamicState, 2> { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
+            .as_slice());
+    VkFormat            color_format { VK_FORMAT_R8G8B8A8_UNORM };
+    VkImageLayout       color_initial_layout { VK_IMAGE_LAYOUT_UNDEFINED };
+    VkImageLayout       color_final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkAttachmentLoadOp  color_load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
+    VkAttachmentLoadOp  depth_load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
+    VkAttachmentStoreOp depth_store_op { VK_ATTACHMENT_STORE_OP_STORE };
+    VkImageLayout       depth_final_layout { VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+    bool                has_color_attachment { true };
+    bool                has_depth_attachment { false };
 };
 
 struct PipelineCacheKey {
-    std::size_t            value { 0 };
-    std::vector<std::byte> bytes;
+    rstd::size_t value { 0 };
+    Vec<u8>      bytes;
+
+    PipelineCacheKey clone() const { return { .value = value, .bytes = bytes.clone() }; }
+    void             clone_from(const PipelineCacheKey& other) {
+        value = other.value;
+        bytes.clone_from(other.bytes);
+    }
 };
 
 struct RenderPassCacheKey {
-    std::size_t            value { 0 };
-    std::vector<std::byte> bytes;
+    rstd::size_t value { 0 };
+    Vec<u8>      bytes;
+
+    RenderPassCacheKey clone() const { return { .value = value, .bytes = bytes.clone() }; }
+    void               clone_from(const RenderPassCacheKey& other) {
+        value = other.value;
+        bytes.clone_from(other.bytes);
+    }
 };
 
 struct FramebufferCacheKey {
-    std::size_t            value { 0 };
-    std::vector<std::byte> bytes;
+    rstd::size_t value { 0 };
+    Vec<u8>      bytes;
+
+    FramebufferCacheKey clone() const { return { .value = value, .bytes = bytes.clone() }; }
+    void                clone_from(const FramebufferCacheKey& other) {
+        value = other.value;
+        bytes.clone_from(other.bytes);
+    }
 };
 
 struct FramebufferAttachmentIdentity {
-    std::size_t            value { 0 };
-    std::vector<std::byte> bytes;
+    rstd::size_t value { 0 };
+    Vec<u8>      bytes;
+
+    FramebufferAttachmentIdentity clone() const {
+        return { .value = value, .bytes = bytes.clone() };
+    }
+    void clone_from(const FramebufferAttachmentIdentity& other) {
+        value = other.value;
+        bytes.clone_from(other.bytes);
+    }
 };
 
 struct FramebufferAttachmentDesc {
     VkImageView                   view { VK_NULL_HANDLE };
     FramebufferAttachmentIdentity identity;
+
+    FramebufferAttachmentDesc clone() const {
+        return { .view = view, .identity = identity.clone() };
+    }
+    void clone_from(const FramebufferAttachmentDesc& other) {
+        view = other.view;
+        identity.clone_from(other.identity);
+    }
 };
 
 struct FramebufferResourceRequest {
-    VkRenderPass                           render_pass { VK_NULL_HANDLE };
-    RenderPassCacheKey                     render_pass_key;
-    std::vector<FramebufferAttachmentDesc> attachments;
-    VkExtent2D                             extent { 0, 0 };
-    uint32_t                               layers { 1 };
+    VkRenderPass                   render_pass { VK_NULL_HANDLE };
+    RenderPassCacheKey             render_pass_key;
+    Vec<FramebufferAttachmentDesc> attachments;
+    VkExtent2D                     extent { 0, 0 };
+    rstd::uint32_t                 layers { 1 };
 };
 
 struct RenderPassResourceDesc {
@@ -110,35 +146,36 @@ struct RenderPassResourceDesc {
 };
 
 struct PipelineResourceDesc {
-    resource::PipelineLayoutHandle                 pipeline_layout;
-    std::vector<VkVertexInputBindingDescription>   vertex_bindings;
-    std::vector<VkVertexInputAttributeDescription> vertex_attrs;
-    std::vector<ShaderSpv>                         shader_stages;
-    VkPipelineColorBlendAttachmentState            color_blend {};
-    VkPipelineColorBlendStateCreateFlags           color_blend_flags { 0 };
-    rstd::array<float, 4>                          blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
-    VkPipelineDepthStencilStateCreateInfo          depth {};
-    VkPipelineRasterizationStateCreateInfo         raster {};
-    VkPipelineMultisampleStateCreateInfo           multisample {};
-    VkPipelineCreateFlags                          create_flags { 0 };
-    VkPrimitiveTopology         topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
-    uint32_t                    subpass { 0 };
-    bool                        primitive_restart_enable { false };
-    uint32_t                    viewport_count { 1 };
-    uint32_t                    scissor_count { 1 };
-    bool                        logic_op_enable { false };
-    VkLogicOp                   logic_op { VK_LOGIC_OP_COPY };
-    std::vector<VkDynamicState> dynamic_states { VK_DYNAMIC_STATE_VIEWPORT,
-                                                 VK_DYNAMIC_STATE_SCISSOR };
-    RenderPassResourceDesc      render_pass;
+    resource::PipelineLayoutHandle         pipeline_layout;
+    Vec<VkVertexInputBindingDescription>   vertex_bindings;
+    Vec<VkVertexInputAttributeDescription> vertex_attrs;
+    Vec<ShaderSpv>                         shader_stages;
+    VkPipelineColorBlendAttachmentState    color_blend {};
+    VkPipelineColorBlendStateCreateFlags   color_blend_flags { 0 };
+    rstd::array<float, 4>                  blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
+    VkPipelineDepthStencilStateCreateInfo  depth {};
+    VkPipelineRasterizationStateCreateInfo raster {};
+    VkPipelineMultisampleStateCreateInfo   multisample {};
+    VkPipelineCreateFlags                  create_flags { 0 };
+    VkPrimitiveTopology                    topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
+    rstd::uint32_t                         subpass { 0 };
+    bool                                   primitive_restart_enable { false };
+    rstd::uint32_t                         viewport_count { 1 };
+    rstd::uint32_t                         scissor_count { 1 };
+    bool                                   logic_op_enable { false };
+    VkLogicOp                              logic_op { VK_LOGIC_OP_COPY };
+    Vec<VkDynamicState>                    dynamic_states = Vec<VkDynamicState>::from(
+        rstd::array<VkDynamicState, 2> { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
+            .as_slice());
+    RenderPassResourceDesc render_pass;
 };
 
 struct FramebufferResourceDesc {
-    VkRenderPass                           render_pass { VK_NULL_HANDLE };
-    RenderPassCacheKey                     render_pass_key;
-    std::vector<FramebufferAttachmentDesc> attachments;
-    VkExtent2D                             extent { 0, 0 };
-    uint32_t                               layers { 1 };
+    VkRenderPass                   render_pass { VK_NULL_HANDLE };
+    RenderPassCacheKey             render_pass_key;
+    Vec<FramebufferAttachmentDesc> attachments;
+    VkExtent2D                     extent { 0, 0 };
+    rstd::uint32_t                 layers { 1 };
 };
 
 struct PipelineCacheProbe {
@@ -161,58 +198,58 @@ inline bool SameFramebufferCacheKey(const FramebufferCacheKey& lhs,
 }
 
 struct CanonicalCacheKeyData {
-    std::size_t            value { 0 };
-    std::vector<std::byte> bytes;
+    rstd::size_t value { 0 };
+    Vec<u8>      bytes;
 };
 
 class PipelineKeyWriter {
 public:
-    void writeArraySize(std::size_t value) {
+    void writeArraySize(rstd::size_t value) {
         writeType(ValueType::ArraySize);
-        writeRawU64(static_cast<std::uint64_t>(value));
+        writeRawU64(static_cast<rstd::uint64_t>(value));
     }
 
     void writeBool(bool value) {
         writeType(ValueType::Bool);
-        writeRawU8(static_cast<std::uint8_t>(value ? 1u : 0u));
+        writeRawU8(static_cast<rstd::uint8_t>(value ? 1u : 0u));
     }
 
-    void writeU32(std::uint32_t value) {
+    void writeU32(rstd::uint32_t value) {
         writeType(ValueType::U32);
         writeRawU32(value);
     }
 
-    void writeU64(std::uint64_t value) {
+    void writeU64(rstd::uint64_t value) {
         writeType(ValueType::U64);
         writeRawU64(value);
     }
 
     void writeF32(float value) {
         writeType(ValueType::F32);
-        writeRawU32(std::bit_cast<std::uint32_t>(value));
+        writeRawU32(rstd::bit_cast<rstd::uint32_t>(value));
     }
 
-    void writeString(std::string_view value) {
+    void writeString(ref<str> value) {
         writeType(ValueType::String);
-        writeRawU64(static_cast<std::uint64_t>(value.size()));
-        for (unsigned char ch : value) writeRawU8(static_cast<std::uint8_t>(ch));
+        writeRawU64(static_cast<rstd::uint64_t>(value.len().to_primitive()));
+        for (auto ch : value.as_bytes()) writeRawU8(ch.to_primitive());
     }
 
-    void writeBytes(std::span<const std::byte> value) {
+    void writeBytes(slice<u8> value) {
         writeType(ValueType::Bytes);
-        writeRawU64(static_cast<std::uint64_t>(value.size()));
-        m_bytes.insert(m_bytes.end(), value.begin(), value.end());
+        writeRawU64(static_cast<rstd::uint64_t>(value.len().to_primitive()));
+        m_bytes.extend_from_slice(value);
     }
 
     CanonicalCacheKeyData finish() && {
         return CanonicalCacheKeyData {
-            .value = HashCanonicalBytes(std::span<const std::byte>(m_bytes.data(), m_bytes.size())),
-            .bytes = std::move(m_bytes),
+            .value = HashCanonicalBytes(m_bytes.as_slice()),
+            .bytes = rstd::move(m_bytes),
         };
     }
 
 private:
-    enum class ValueType : std::uint8_t
+    enum class ValueType : rstd::uint8_t
     {
         U32       = 1,
         U64       = 2,
@@ -223,39 +260,32 @@ private:
         Bytes     = 7,
     };
 
-    static std::size_t HashCanonicalBytes(std::span<const std::byte> bytes) {
-        std::uint64_t hash { 1469598103934665603ull };
+    static rstd::size_t HashCanonicalBytes(slice<u8> bytes) {
+        rstd::uint64_t hash { 1469598103934665603ull };
         for (auto byte : bytes) {
-            hash ^= static_cast<std::uint8_t>(byte);
+            hash ^= byte.to_primitive();
             hash *= 1099511628211ull;
         }
-        return static_cast<std::size_t>(hash);
+        return static_cast<rstd::size_t>(hash);
     }
 
-    void writeType(ValueType type) { writeRawU8(static_cast<std::uint8_t>(type)); }
+    void writeType(ValueType type) { writeRawU8(static_cast<rstd::uint8_t>(type)); }
 
-    void writeRawU8(std::uint8_t value) { m_bytes.push_back(static_cast<std::byte>(value)); }
+    void writeRawU8(rstd::uint8_t value) { m_bytes.push(u8(value)); }
 
-    void writeRawU32(std::uint32_t value) {
+    void writeRawU32(rstd::uint32_t value) {
         for (unsigned shift = 0; shift < 32; shift += 8) {
-            writeRawU8(static_cast<std::uint8_t>((value >> shift) & 0xffu));
+            writeRawU8(static_cast<rstd::uint8_t>((value >> shift) & 0xffu));
         }
     }
 
-    void writeRawU64(std::uint64_t value) {
+    void writeRawU64(rstd::uint64_t value) {
         for (unsigned shift = 0; shift < 64; shift += 8) {
-            writeRawU8(static_cast<std::uint8_t>((value >> shift) & 0xffull));
+            writeRawU8(static_cast<rstd::uint8_t>((value >> shift) & 0xffull));
         }
     }
 
-    std::vector<std::byte> m_bytes;
-};
-
-struct CanonicalCacheKeyStdHash {
-    template<typename T>
-    std::size_t operator()(const T& key) const {
-        return key.value;
-    }
+    Vec<u8> m_bytes;
 };
 
 struct PipelineCacheKeyEqual {
@@ -278,71 +308,69 @@ struct FramebufferCacheKeyEqual {
 
 template<typename T>
 inline void WritePipelineScalar(PipelineKeyWriter& writer, T value) {
-    writer.writeU64(static_cast<std::uint64_t>(value));
+    writer.writeU64(static_cast<rstd::uint64_t>(value));
 }
 
 inline void WriteCacheKey(PipelineKeyWriter& writer, const RenderPassCacheKey& key) {
-    writer.writeU64(static_cast<std::uint64_t>(key.value));
-    writer.writeBytes(std::span<const std::byte>(key.bytes.data(), key.bytes.size()));
+    writer.writeU64(static_cast<rstd::uint64_t>(key.value));
+    writer.writeBytes(key.bytes.as_slice());
 }
 
-inline void WritePipelineShaderStages(PipelineKeyWriter&         writer,
-                                      std::span<const ShaderSpv> stages) {
+inline void WritePipelineShaderStages(PipelineKeyWriter& writer, slice<ShaderSpv> stages) {
     struct StageRecord {
-        vrento::ShaderType               stage;
-        std::string_view                 entry_point;
-        const std::vector<unsigned int>* spirv { nullptr };
+        vrento::ShaderType    stage;
+        ref<str>              entry_point;
+        slice<rstd::uint32_t> spirv;
     };
 
-    std::vector<StageRecord> records;
-    records.reserve(stages.size());
+    Vec<StageRecord> records;
+    records.reserve(stages.len());
     for (const auto& stage : stages) {
-        records.push_back(StageRecord {
+        records.push(StageRecord {
             .stage       = stage.stage,
-            .entry_point = stage.entry_point,
-            .spirv       = &stage.spirv,
+            .entry_point = stage.entry_point.as_str(),
+            .spirv       = stage.spirv.as_slice(),
         });
     }
-    std::sort(records.begin(), records.end(), [](const auto& lhs, const auto& rhs) {
+    sort_unstable_by(records.as_mut_slice().as_mut_ref(), [](const auto& lhs, const auto& rhs) {
         if (lhs.stage != rhs.stage) {
             return static_cast<int>(lhs.stage) < static_cast<int>(rhs.stage);
         }
-        return lhs.entry_point.compare(rhs.entry_point) < 0;
+        return lhs.entry_point.bytes().cmp(rhs.entry_point.bytes()) < 0;
     });
 
-    writer.writeArraySize(records.size());
+    writer.writeArraySize(records.len().to_primitive());
     for (const auto& record : records) {
         WritePipelineScalar(writer, record.stage);
         writer.writeString(record.entry_point);
-        writer.writeArraySize(record.spirv != nullptr ? record.spirv->size() : std::size_t { 0 });
-        if (record.spirv != nullptr) {
-            for (auto word : *record.spirv) writer.writeU32(static_cast<std::uint32_t>(word));
-        }
+        writer.writeArraySize(record.spirv.len().to_primitive());
+        for (auto word : record.spirv) writer.writeU32(word);
     }
 }
 
-inline void WritePipelineVertexInput(PipelineKeyWriter&                                 writer,
-                                     std::span<const VkVertexInputBindingDescription>   bindings,
-                                     std::span<const VkVertexInputAttributeDescription> attrs) {
-    auto sorted_bindings =
-        std::vector<VkVertexInputBindingDescription>(bindings.begin(), bindings.end());
-    std::sort(sorted_bindings.begin(), sorted_bindings.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.binding < rhs.binding;
-    });
+inline void WritePipelineVertexInput(PipelineKeyWriter&                       writer,
+                                     slice<VkVertexInputBindingDescription>   bindings,
+                                     slice<VkVertexInputAttributeDescription> attrs) {
+    auto sorted_bindings = Vec<VkVertexInputBindingDescription>::from(bindings);
+    sort_unstable_by(sorted_bindings.as_mut_slice().as_mut_ref(),
+                     [](const auto& lhs, const auto& rhs) {
+                         return lhs.binding < rhs.binding;
+                     });
 
-    auto sorted_attrs = std::vector<VkVertexInputAttributeDescription>(attrs.begin(), attrs.end());
-    std::sort(sorted_attrs.begin(), sorted_attrs.end(), [](const auto& lhs, const auto& rhs) {
-        if (lhs.location != rhs.location) return lhs.location < rhs.location;
-        return lhs.binding < rhs.binding;
-    });
+    auto sorted_attrs = Vec<VkVertexInputAttributeDescription>::from(attrs);
+    sort_unstable_by(sorted_attrs.as_mut_slice().as_mut_ref(),
+                     [](const auto& lhs, const auto& rhs) {
+                         if (lhs.location != rhs.location) return lhs.location < rhs.location;
+                         return lhs.binding < rhs.binding;
+                     });
 
-    writer.writeArraySize(sorted_bindings.size());
+    writer.writeArraySize(sorted_bindings.len().to_primitive());
     for (const auto& binding : sorted_bindings) {
         writer.writeU32(binding.binding);
         writer.writeU32(binding.stride);
         WritePipelineScalar(writer, binding.inputRate);
     }
-    writer.writeArraySize(sorted_attrs.size());
+    writer.writeArraySize(sorted_attrs.len().to_primitive());
     for (const auto& attr : sorted_attrs) {
         writer.writeU32(attr.location);
         writer.writeU32(attr.binding);
@@ -385,11 +413,12 @@ inline void WritePipelineViewportState(PipelineKeyWriter&          writer,
     writer.writeU32(desc.scissor_count);
 }
 
-inline void WritePipelineDynamicStates(PipelineKeyWriter&              writer,
-                                       std::span<const VkDynamicState> states) {
-    auto sorted_states = std::vector<VkDynamicState>(states.begin(), states.end());
-    std::sort(sorted_states.begin(), sorted_states.end());
-    writer.writeArraySize(sorted_states.size());
+inline void WritePipelineDynamicStates(PipelineKeyWriter& writer, slice<VkDynamicState> states) {
+    auto sorted_states = Vec<VkDynamicState>::from(states);
+    sort_unstable_by(sorted_states.as_mut_slice().as_mut_ref(), [](auto lhs, auto rhs) {
+        return lhs < rhs;
+    });
+    writer.writeArraySize(sorted_states.len().to_primitive());
     for (auto state : sorted_states) WritePipelineScalar(writer, state);
 }
 
@@ -433,8 +462,8 @@ inline void WritePipelineRaster(PipelineKeyWriter&                            wr
     writer.writeF32(state.lineWidth);
 }
 
-inline uint32_t SampleMaskWordCount(VkSampleCountFlagBits samples) {
-    auto count = static_cast<uint32_t>(samples);
+inline rstd::uint32_t SampleMaskWordCount(VkSampleCountFlagBits samples) {
+    auto count = static_cast<rstd::uint32_t>(samples);
     return (count + 31u) / 32u;
 }
 
@@ -445,10 +474,10 @@ inline void WritePipelineMultisample(PipelineKeyWriter&                         
     writer.writeBool(state.sampleShadingEnable == VK_TRUE);
     writer.writeF32(state.minSampleShading);
     const auto mask_word_count = SampleMaskWordCount(state.rasterizationSamples);
-    writer.writeArraySize(state.pSampleMask != nullptr ? static_cast<std::size_t>(mask_word_count)
-                                                       : std::size_t { 0 });
+    writer.writeArraySize(state.pSampleMask != nullptr ? static_cast<rstd::size_t>(mask_word_count)
+                                                       : rstd::size_t { 0 });
     if (state.pSampleMask != nullptr) {
-        for (uint32_t i = 0; i < mask_word_count; ++i) {
+        for (rstd::uint32_t i = 0; i < mask_word_count; ++i) {
             writer.writeU32(state.pSampleMask[i]);
         }
     }
@@ -486,17 +515,17 @@ inline RenderPassResourceDesc MakeRenderPassResourceDesc(const PipelineResourceR
 }
 
 inline PipelineResourceDesc MakePipelineResourceDesc(const PipelineResourceRequest& request) {
-    std::vector<ShaderSpv> shader_stages;
-    shader_stages.reserve(request.shader_stages.size());
+    Vec<ShaderSpv> shader_stages;
+    shader_stages.reserve(request.shader_stages.len());
     for (const auto& stage : request.shader_stages) {
-        shader_stages.push_back(*stage);
+        shader_stages.push(stage->clone());
     }
 
     return PipelineResourceDesc {
         .pipeline_layout          = request.pipeline_layout,
-        .vertex_bindings          = request.vertex_bindings,
-        .vertex_attrs             = request.vertex_attrs,
-        .shader_stages            = std::move(shader_stages),
+        .vertex_bindings          = request.vertex_bindings.clone(),
+        .vertex_attrs             = request.vertex_attrs.clone(),
+        .shader_stages            = rstd::move(shader_stages),
         .color_blend              = request.color_blend,
         .color_blend_flags        = request.color_blend_flags,
         .blend_constants          = request.blend_constants,
@@ -511,7 +540,7 @@ inline PipelineResourceDesc MakePipelineResourceDesc(const PipelineResourceReque
         .scissor_count            = request.scissor_count,
         .logic_op_enable          = request.logic_op_enable,
         .logic_op                 = request.logic_op,
-        .dynamic_states           = request.dynamic_states,
+        .dynamic_states           = request.dynamic_states.clone(),
         .render_pass              = MakeRenderPassResourceDesc(request),
     };
 }
@@ -520,8 +549,8 @@ inline FramebufferResourceDesc
 MakeFramebufferResourceDesc(const FramebufferResourceRequest& request) {
     return FramebufferResourceDesc {
         .render_pass     = request.render_pass,
-        .render_pass_key = request.render_pass_key,
-        .attachments     = request.attachments,
+        .render_pass_key = request.render_pass_key.clone(),
+        .attachments     = request.attachments.clone(),
         .extent          = request.extent,
         .layers          = request.layers,
     };
@@ -565,41 +594,41 @@ inline void WriteRenderPassDesc(PipelineKeyWriter& writer, const RenderPassResou
 }
 
 inline PipelineCacheKey ToPipelineCacheKey(CanonicalCacheKeyData data) {
-    return PipelineCacheKey { .value = data.value, .bytes = std::move(data.bytes) };
+    return PipelineCacheKey { .value = data.value, .bytes = rstd::move(data.bytes) };
 }
 
 inline RenderPassCacheKey ToRenderPassCacheKey(CanonicalCacheKeyData data) {
-    return RenderPassCacheKey { .value = data.value, .bytes = std::move(data.bytes) };
+    return RenderPassCacheKey { .value = data.value, .bytes = rstd::move(data.bytes) };
 }
 
 inline FramebufferCacheKey ToFramebufferCacheKey(CanonicalCacheKeyData data) {
-    return FramebufferCacheKey { .value = data.value, .bytes = std::move(data.bytes) };
+    return FramebufferCacheKey { .value = data.value, .bytes = rstd::move(data.bytes) };
 }
 
 inline FramebufferAttachmentIdentity ToFramebufferAttachmentIdentity(CanonicalCacheKeyData data) {
-    return FramebufferAttachmentIdentity { .value = data.value, .bytes = std::move(data.bytes) };
+    return FramebufferAttachmentIdentity { .value = data.value, .bytes = rstd::move(data.bytes) };
 }
 
 inline RenderPassCacheKey MakeRenderPassCacheKey(const RenderPassResourceDesc& desc);
 
 inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceDesc& desc) {
     PipelineKeyWriter writer;
-    writer.writeString("pipeline-v2");
+    writer.writeString("pipeline-v2"_str);
     writer.writeU32(desc.create_flags);
     writer.writeU32(desc.subpass);
     WriteCacheKey(writer, MakeRenderPassCacheKey(desc.render_pass));
-    WritePipelineShaderStages(writer, desc.shader_stages);
+    WritePipelineShaderStages(writer, desc.shader_stages.as_slice());
     writer.writeU64(desc.pipeline_layout.index.to_primitive());
     writer.writeU64(desc.pipeline_layout.generation.to_primitive());
-    WritePipelineVertexInput(writer, desc.vertex_bindings, desc.vertex_attrs);
+    WritePipelineVertexInput(writer, desc.vertex_bindings.as_slice(), desc.vertex_attrs.as_slice());
     WritePipelineInputAssembly(writer, desc);
     WritePipelineViewportState(writer, desc);
     WritePipelineColorBlendState(writer, desc);
     WritePipelineDepthStencil(writer, desc.depth);
     WritePipelineRaster(writer, desc.raster);
     WritePipelineMultisample(writer, desc.multisample);
-    WritePipelineDynamicStates(writer, desc.dynamic_states);
-    return ToPipelineCacheKey(std::move(writer).finish());
+    WritePipelineDynamicStates(writer, desc.dynamic_states.as_slice());
+    return ToPipelineCacheKey(rstd::move(writer).finish());
 }
 
 inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceRequest& request) {
@@ -608,9 +637,9 @@ inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceRequest& requ
 
 inline RenderPassCacheKey MakeRenderPassCacheKey(const RenderPassResourceDesc& desc) {
     PipelineKeyWriter writer;
-    writer.writeString("render-pass-v1");
+    writer.writeString("render-pass-v1"_str);
     WriteRenderPassDesc(writer, desc);
-    return ToRenderPassCacheKey(std::move(writer).finish());
+    return ToRenderPassCacheKey(rstd::move(writer).finish());
 }
 
 inline RenderPassCacheKey MakeRenderPassCacheKey(const PipelineResourceRequest& request) {
@@ -619,20 +648,19 @@ inline RenderPassCacheKey MakeRenderPassCacheKey(const PipelineResourceRequest& 
 
 inline FramebufferCacheKey MakeFramebufferCacheKey(const FramebufferResourceDesc& desc) {
     PipelineKeyWriter writer;
-    writer.writeString("framebuffer-v1");
+    writer.writeString("framebuffer-v1"_str);
     WriteCacheKey(writer, desc.render_pass_key);
-    writer.writeArraySize(desc.attachments.size());
+    writer.writeArraySize(desc.attachments.len().to_primitive());
     for (const auto& attachment : desc.attachments) {
         writer.writeU64(
-            static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(attachment.view)));
-        writer.writeU64(static_cast<std::uint64_t>(attachment.identity.value));
-        writer.writeBytes(std::span<const std::byte>(attachment.identity.bytes.data(),
-                                                     attachment.identity.bytes.size()));
+            static_cast<rstd::uint64_t>(reinterpret_cast<rstd::uintptr_t>(attachment.view)));
+        writer.writeU64(static_cast<rstd::uint64_t>(attachment.identity.value));
+        writer.writeBytes(attachment.identity.bytes.as_slice());
     }
     writer.writeU32(desc.extent.width);
     writer.writeU32(desc.extent.height);
     writer.writeU32(desc.layers);
-    return ToFramebufferCacheKey(std::move(writer).finish());
+    return ToFramebufferCacheKey(rstd::move(writer).finish());
 }
 
 inline FramebufferCacheKey MakeFramebufferCacheKey(const FramebufferResourceRequest& request) {

@@ -9,7 +9,6 @@ module;
 export module vrento.vulkan;
 import rstd;
 import rstd.log;
-import rstd.cppstd;
 import vrento.texture_types;
 import vrento.image;
 import vrento.video_playback;
@@ -28,6 +27,14 @@ export import vvk;
 export import vrento.shader_compile;
 
 using namespace rstd::prelude;
+using namespace rstd::literals;
+using rstd::collections::BTreeMap;
+using rstd::collections::BTreeSet;
+using rstd::ffi::CString;
+using rstd::sync::Arc;
+using rstd::sync::Weak;
+using rstd::sync::atomic::Atomic;
+using rstd::sync::atomic::Ordering;
 
 export namespace vrento
 {
@@ -171,6 +178,20 @@ struct FrameSurfaceCompletionResult {
 
 class ExSwapchain;
 
+struct ExSwapchainObject {
+    using Trait                  = ExSwapchainObject;
+    static constexpr bool direct = false;
+    template<typename Self, typename = void>
+    struct Api {
+        using Trait = ExSwapchainObject;
+        auto AsSwapchain() -> ExSwapchain& { return rstd::trait_call<0>(this); }
+    };
+    template<typename T>
+    using Funcs = rstd::TraitFuncs<&T::AsSwapchain>;
+};
+
+using ExSwapchainOwner = Arc<dyn<ExSwapchainObject>>;
+
 class FrameSurfaceCompletionCapability {
 public:
     FrameSurfaceCompletionCapability() = default;
@@ -181,7 +202,7 @@ public:
     FrameSurfaceCompletionCapability(FrameSurfaceCompletionCapability&&) noexcept;
     FrameSurfaceCompletionCapability& operator=(FrameSurfaceCompletionCapability&&) noexcept;
 
-    bool valid() const noexcept { return m_owner != nullptr && m_identity.valid(); }
+    bool valid() const noexcept { return m_owner.is_some() && m_identity.valid(); }
 
     FrameSurfaceCompletionResult Submit(int producer_sync_fd);
     FrameSurfaceCompletionResult Abort();
@@ -189,12 +210,11 @@ public:
 private:
     friend class ExSwapchain;
 
-    FrameSurfaceCompletionCapability(std::shared_ptr<ExSwapchain> owner,
-                                     FrameSurfaceIdentity         identity)
-        : m_owner(std::move(owner)), m_identity(identity) {}
+    FrameSurfaceCompletionCapability(ExSwapchainOwner owner, FrameSurfaceIdentity identity)
+        : m_owner(Some(rstd::move(owner))), m_identity(identity) {}
 
-    std::shared_ptr<ExSwapchain> m_owner;
-    FrameSurfaceIdentity         m_identity;
+    Option<ExSwapchainOwner> m_owner;
+    FrameSurfaceIdentity     m_identity;
 };
 
 enum class FrameSurfaceAcquireStatus
@@ -262,14 +282,14 @@ public:
 
     T* eatFrame() {
         if (! dirty().exchange(false)) return nullptr;
-        presented() = ready().exchange(presented());
-        return presented();
+        presented().store(ready().exchange(presented().load()));
+        return presented().load();
     }
     void renderFrame() {
-        inprogress() = ready().exchange(inprogress());
+        inprogress().store(ready().exchange(inprogress().load()));
         dirty().exchange(true);
     }
-    T* getInprogress() { return inprogress(); }
+    T* getInprogress() { return inprogress().load(); }
 
     rstd::array<T*, 3> snapshot_all_slots() {
         return rstd::array<T*, 3> { presented().load(), ready().load(), inprogress().load() };
@@ -281,13 +301,13 @@ public:
 protected:
     TripleSwapchain() = default;
 
-    virtual std::atomic<T*>& presented()  = 0;
-    virtual std::atomic<T*>& ready()      = 0;
-    virtual std::atomic<T*>& inprogress() = 0;
+    virtual Atomic<T*>& presented()  = 0;
+    virtual Atomic<T*>& ready()      = 0;
+    virtual Atomic<T*>& inprogress() = 0;
 
 private:
-    std::atomic<bool>& dirty() { return m_dirty; };
-    std::atomic<bool>  m_dirty { false };
+    Atomic<bool>& dirty() { return m_dirty; };
+    Atomic<bool>  m_dirty { false };
 };
 
 // Producer-side abstraction over the offscreen swapchain. Two
@@ -298,9 +318,14 @@ private:
 //     / `snapshot_all_slots()`.
 //   - BridgeExSwapchain: wraps a `ww_pool_t`; bridge owns the slot images
 //     and completes submission through the acquired frame capability.
-class ExSwapchain : public std::enable_shared_from_this<ExSwapchain> {
+using ExSwapchainReadyCallback = Arc<dyn<Fn<void(const ExSwapchainReadyEvent&)>>>;
+
+class ExSwapchain {
 public:
     virtual ~ExSwapchain() = default;
+
+    template<typename T, typename... Args>
+    static auto Make(Args&&... args) -> ExSwapchainOwner;
 
     ExSwapchain(const ExSwapchain&)            = delete;
     ExSwapchain& operator=(const ExSwapchain&) = delete;
@@ -324,17 +349,20 @@ public:
 
     virtual bool ready() const = 0;
 
-    virtual void setOnReadyChanged(std::function<void(const ExSwapchainReadyEvent&)>) = 0;
+    virtual void setOnReadyChanged(Option<ExSwapchainReadyCallback>) = 0;
 
 protected:
     ExSwapchain() = default;
 
     FrameSurfaceCompletionCapability MakeCompletionCapability(FrameSurfaceIdentity identity) {
-        return FrameSurfaceCompletionCapability(shared_from_this(), identity);
+        auto owner = m_owner.upgrade();
+        if (! owner) return {};
+        return FrameSurfaceCompletionCapability(rstd::move(owner), identity);
     }
 
 private:
     friend class FrameSurfaceCompletionCapability;
+    Weak<dyn<ExSwapchainObject>> m_owner { Weak<dyn<ExSwapchainObject>>::make() };
 
     virtual FrameSurfaceCompletionResult CompleteRendered(FrameSurfaceIdentity identity,
                                                           int producer_sync_fd)           = 0;
@@ -347,7 +375,7 @@ inline FrameSurfaceCompletionCapability::~FrameSurfaceCompletionCapability() {
 
 inline FrameSurfaceCompletionCapability::FrameSurfaceCompletionCapability(
     FrameSurfaceCompletionCapability&& other) noexcept
-    : m_owner(std::move(other.m_owner)), m_identity(other.m_identity) {
+    : m_owner(rstd::move(other.m_owner)), m_identity(other.m_identity) {
     other.m_identity = {};
 }
 
@@ -355,7 +383,7 @@ inline FrameSurfaceCompletionCapability&
 FrameSurfaceCompletionCapability::operator=(FrameSurfaceCompletionCapability&& other) noexcept {
     if (this == &other) return *this;
     if (valid()) (void)Abort();
-    m_owner          = std::move(other.m_owner);
+    m_owner          = rstd::move(other.m_owner);
     m_identity       = other.m_identity;
     other.m_identity = {};
     return *this;
@@ -366,18 +394,18 @@ inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Submit(int
         if (producer_sync_fd >= 0) ::close(producer_sync_fd);
         return {};
     }
-    auto owner    = std::move(m_owner);
+    auto owner    = m_owner.take().unwrap();
     auto identity = m_identity;
     m_identity    = {};
-    return owner->CompleteRendered(identity, producer_sync_fd);
+    return owner->AsSwapchain().CompleteRendered(identity, producer_sync_fd);
 }
 
 inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Abort() {
     if (! valid()) return {};
-    auto owner    = std::move(m_owner);
+    auto owner    = m_owner.take().unwrap();
     auto identity = m_identity;
     m_identity    = {};
-    return owner->AbortRenderTarget(identity);
+    return owner->AsSwapchain().AbortRenderTarget(identity);
 }
 
 namespace vulkan
@@ -386,15 +414,15 @@ namespace vulkan
 // ---------- Instance.hpp ----------
 
 struct Extension {
-    bool             required { false };
-    std::string_view name;
+    bool     required { false };
+    ref<str> name;
 };
 
 using InstanceLayer = Extension;
 
-using CheckGpuOp = std::function<bool(const vvk::PhysicalDevice&)>;
+using CheckGpuOp = dyn<FnMut<bool(const vvk::PhysicalDevice&)>>;
 
-constexpr std::string_view VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
+constexpr auto VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation"_str;
 
 constexpr rstd::uint32_t WP_VULKAN_VERSION { VK_API_VERSION_1_1 };
 constexpr const char*    WP_APPLICATION_NAME { "scene render" };
@@ -407,20 +435,20 @@ public:
 
     void Destroy();
 
-    static bool Create(Instance&, std::span<const Extension>, std::span<const InstanceLayer>,
+    static bool Create(Instance&, slice<Extension>, slice<InstanceLayer>,
                        rstd::uint32_t api_version = WP_VULKAN_VERSION);
-    bool ChoosePhysicalDevice(const CheckGpuOp& checkgpu, std::span<const rstd::uint8_t> uuid = {});
+    bool        ChoosePhysicalDevice(mut_ref<CheckGpuOp> checkgpu, slice<rstd::uint8_t> uuid = {});
 
-    const vvk::Instance&         inst() const;
-    const vvk::PhysicalDevice&   gpu() const;
-    const vvk::SurfaceKHR&       surface() const;
-    rstd::uint32_t               api_version() const { return m_api_version; }
-    std::span<const std::string> enabled_extensions() const { return m_enabled_extensions; }
+    const vvk::Instance&       inst() const;
+    const vvk::PhysicalDevice& gpu() const;
+    const vvk::SurfaceKHR&     surface() const;
+    rstd::uint32_t             api_version() const { return m_api_version; }
+    slice<CString> enabled_extensions() const { return m_enabled_extensions.as_slice(); }
 
     bool offscreen() const;
     void setSurface(VkSurfaceKHR);
-    bool supportExt(std::string_view) const;
-    bool supportLayer(std::string_view) const;
+    bool supportExt(ref<str>) const;
+    bool supportLayer(ref<str>) const;
 
 private:
     Option<vvk::VulkanLoader> m_loader;
@@ -431,10 +459,10 @@ private:
     vvk::PhysicalDevice      m_gpu {};
     rstd::uint32_t           m_api_version { WP_VULKAN_VERSION };
 
-    vvk::SurfaceKHR                    m_surface {};
-    std::set<std::string, std::less<>> m_extensions;
-    std::vector<std::string>           m_enabled_extensions;
-    std::set<std::string, std::less<>> m_layers;
+    vvk::SurfaceKHR  m_surface {};
+    BTreeSet<String> m_extensions { BTreeSet<String>::make() };
+    Vec<CString>     m_enabled_extensions;
+    BTreeSet<String> m_layers { BTreeSet<String>::make() };
 };
 
 // ShaderSpv / Uni_ShaderSpv now live in vrento.shader_compile (re-exported above).
@@ -532,9 +560,9 @@ inline ImageParameters ToImageParameters(const ExImageParameters& o) noexcept {
 }
 
 struct ImageSlots {
-    ImageSlots(const ImageSlots&)                                      = delete;
-    ImageSlots&                           operator=(const ImageSlots&) = delete;
-    std::vector<AllocatedImageParameters> slots;
+    ImageSlots(const ImageSlots&)                              = delete;
+    ImageSlots&                   operator=(const ImageSlots&) = delete;
+    Vec<AllocatedImageParameters> slots;
 
     ImageSlots();
     ~ImageSlots();
@@ -543,17 +571,28 @@ struct ImageSlots {
 };
 
 struct ImageSlotsRef {
-    std::vector<ImageParameters> slots;
+    Vec<ImageParameters> slots;
 
-    std::ptrdiff_t active { 0 };
+    rstd::ptrdiff_t active { 0 };
 
     auto& getActive() const {
-        if (active > 0 && active >= std::ssize(slots)) return slots[0];
-        return slots[static_cast<std::size_t>(active)];
+        if (active > 0 && active >= static_cast<rstd::ptrdiff_t>(slots.len().to_primitive()))
+            return slots[usize()];
+        return slots[usize(active)];
     }
     ImageSlotsRef();
     ~ImageSlotsRef();
     ImageSlotsRef(const ImageSlots&);
+    ImageSlotsRef(const ImageSlotsRef& other): slots(other.slots.clone()), active(other.active) {}
+    ImageSlotsRef& operator=(const ImageSlotsRef& other) {
+        if (this != &other) {
+            slots  = other.slots.clone();
+            active = other.active;
+        }
+        return *this;
+    }
+    ImageSlotsRef(ImageSlotsRef&&) noexcept            = default;
+    ImageSlotsRef& operator=(ImageSlotsRef&&) noexcept = default;
 };
 
 struct TextureAllocationRuntime {
@@ -573,35 +612,35 @@ struct TextureAllocationRuntime {
 
 class TextureAllocation {
 public:
-    explicit TextureAllocation(
-        ImageSlots slots, Option<rstd::sync::Arc<dyn<TextureAllocationRuntime>>> runtime = None())
+    explicit TextureAllocation(ImageSlots                                 slots,
+                               Option<Arc<dyn<TextureAllocationRuntime>>> runtime = None())
         : m_slots(rstd::move(slots)), m_runtime(rstd::move(runtime)) {}
 
     auto View() const -> ImageSlotsRef { return ImageSlotsRef(m_slots); }
 
 private:
-    ImageSlots                                             m_slots;
-    Option<rstd::sync::Arc<dyn<TextureAllocationRuntime>>> m_runtime;
+    ImageSlots                                 m_slots;
+    Option<Arc<dyn<TextureAllocationRuntime>>> m_runtime;
 };
 
 // ---------- Swapchain.hpp ----------
 
 class Swapchain {
 public:
-    static bool                      Create(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&);
-    const vvk::SwapchainKHR&         handle() const;
-    VkFormat                         format() const;
-    VkExtent2D                       extent() const;
-    VkPresentModeKHR                 presentMode() const;
-    std::span<const ImageParameters> images() const;
+    static bool              Create(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&);
+    const vvk::SwapchainKHR& handle() const;
+    VkFormat                 format() const;
+    VkExtent2D               extent() const;
+    VkPresentModeKHR         presentMode() const;
+    slice<ImageParameters>   images() const;
 
 private:
-    vvk::SwapchainKHR            m_handle;
-    VkSurfaceFormatKHR           m_format;
-    VkExtent2D                   m_extent;
-    VkPresentModeKHR             m_present_mode;
-    std::vector<ImageParameters> m_images;
-    std::vector<vvk::ImageView>  m_imageviews;
+    vvk::SwapchainKHR    m_handle;
+    VkSurfaceFormatKHR   m_format;
+    VkExtent2D           m_extent;
+    VkPresentModeKHR     m_present_mode;
+    Vec<ImageParameters> m_images;
+    Vec<vvk::ImageView>  m_imageviews;
 };
 
 // ---------- TextureCache.hpp ----------
@@ -633,8 +672,9 @@ public:
     struct VideoRegistry;
 
     struct VideoDecodeOptions {
-        std::string hwdec { "auto" };
-        std::string render_node;
+        String hwdec { "auto"_Str };
+        String render_node;
+        auto clone() const -> VideoDecodeOptions { return { hwdec.clone(), render_node.clone() }; }
     };
 
     TextureCache(const Device&);
@@ -645,10 +685,9 @@ public:
     void SetVideoDecodeOptions(VideoDecodeOptions);
 
     Option<ExImageParameters> CreateExTex(u32 witdh, u32 height, VkFormat, VkImageTiling);
-    rstd::Option<rstd::sync::Arc<TextureAllocation>>
-    AllocateImportedTexture(const Image&,
-                            Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback);
-    rstd::Option<rstd::sync::Arc<TextureAllocation>> AllocateTexture(TextureKey);
+    rstd::Option<Arc<TextureAllocation>>
+    AllocateImportedTexture(const Image&, Option<Arc<rstd::dyn<VideoPlayback>>> playback);
+    rstd::Option<Arc<TextureAllocation>> AllocateTexture(TextureKey);
 
     /* Per-frame hook: advance every registered video-tex by `dt_seconds`,
      * pull as many decoded frames as needed to catch up to wall PTS,
@@ -669,8 +708,8 @@ private:
     /* VIDEO-typed Image branch of AllocateImportedTexture: registers a wavsen
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
-    rstd::Option<rstd::sync::Arc<TextureAllocation>>
-         CreateVideoTex(const Image&, Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback);
+    rstd::Option<Arc<TextureAllocation>>
+         CreateVideoTex(const Image&, Option<Arc<rstd::dyn<VideoPlayback>>> playback);
     void allocateCmd();
     vvk::CommandBuffers m_tex_cmds;
     vvk::CommandBuffer  m_tex_cmd;
@@ -693,8 +732,8 @@ struct ImageUploadTicket {
 };
 
 struct PreparedImageAllocation {
-    rstd::sync::Arc<TextureAllocation> allocation;
-    rstd::Option<ImageUploadTicket>    upload;
+    Arc<TextureAllocation>          allocation;
+    rstd::Option<ImageUploadTicket> upload;
 };
 
 class ImageUploadManager;
@@ -703,7 +742,7 @@ class RecordedImageUploads {
 public:
     RecordedImageUploads(const RecordedImageUploads&)            = delete;
     RecordedImageUploads& operator=(const RecordedImageUploads&) = delete;
-    RecordedImageUploads()                                       = default;
+    RecordedImageUploads();
     ~RecordedImageUploads();
 
     RecordedImageUploads(RecordedImageUploads&&) noexcept;
@@ -716,31 +755,31 @@ private:
     friend class ImageUploadManager;
     friend class ImageUploadBatchLease;
 
-    RecordedImageUploads(ImageUploadManager* owner, std::shared_ptr<State> state);
+    RecordedImageUploads(ImageUploadManager* owner, Arc<State> state);
     void Reset();
 
-    ImageUploadManager*    m_owner { nullptr };
-    std::shared_ptr<State> m_state;
+    ImageUploadManager* m_owner { nullptr };
+    Option<Arc<State>>  m_state;
 };
 
 class ImageUploadBatchLease {
 public:
     ImageUploadBatchLease(const ImageUploadBatchLease&)            = delete;
     ImageUploadBatchLease& operator=(const ImageUploadBatchLease&) = delete;
-    ImageUploadBatchLease()                                        = default;
+    ImageUploadBatchLease();
     ~ImageUploadBatchLease();
 
     ImageUploadBatchLease(ImageUploadBatchLease&&) noexcept;
     ImageUploadBatchLease& operator=(ImageUploadBatchLease&&) noexcept;
 
-    bool                               Valid() const noexcept;
-    std::span<const ImageUploadTicket> Tickets() const noexcept;
+    bool                     Valid() const noexcept;
+    slice<ImageUploadTicket> Tickets() const noexcept;
 
 private:
     friend class ImageUploadManager;
-    explicit ImageUploadBatchLease(std::shared_ptr<RecordedImageUploads::State> state);
+    explicit ImageUploadBatchLease(Arc<RecordedImageUploads::State> state);
 
-    std::shared_ptr<RecordedImageUploads::State> m_state;
+    Option<Arc<RecordedImageUploads::State>> m_state;
 };
 
 class ImageUploadManager {
@@ -755,15 +794,14 @@ public:
     bool init();
     void destroy();
 
-    auto QueueWrite(rstd::sync::Arc<TextureAllocation> allocation, const Image& image)
+    auto QueueWrite(Arc<TextureAllocation> allocation, const Image& image)
         -> Option<ImageUploadTicket>;
-    auto QueueTransparentClear(rstd::sync::Arc<TextureAllocation> allocation)
-        -> Option<ImageUploadTicket>;
+    auto QueueTransparentClear(Arc<TextureAllocation> allocation) -> Option<ImageUploadTicket>;
 
     bool HasPendingUploads() const noexcept;
     bool RecordPendingUploads(vvk::CommandBuffer& command, RecordedImageUploads& recorded);
     auto CommitRecordedUploads(RecordedImageUploads&& recorded) -> Option<ImageUploadBatchLease>;
-    void CancelRecordedUploads(const std::shared_ptr<RecordedImageUploads::State>& state);
+    void CancelRecordedUploads(const Arc<RecordedImageUploads::State>& state);
     void DiscardPendingUploads();
     void Trim();
 
@@ -777,10 +815,9 @@ public:
     ImagePrepareContext(TextureCache& textures, ImageUploadManager& uploads)
         : m_textures(textures), m_uploads(uploads) {}
 
-    auto CreateImportedTexture(ref<Image>                                        image,
-                               Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
+    auto CreateImportedTexture(ref<Image> image, Option<Arc<rstd::dyn<VideoPlayback>>> playback)
         -> Option<PreparedImageAllocation>;
-    auto AllocateTexture(TextureKey key) -> Option<rstd::sync::Arc<TextureAllocation>>;
+    auto AllocateTexture(TextureKey key) -> Option<Arc<TextureAllocation>>;
     auto AllocateTransparentTexture(TextureKey key) -> Option<PreparedImageAllocation>;
 
 private:
@@ -796,13 +833,13 @@ struct ImagePrepareBackend {
     struct Api {
         using Trait = ImagePrepareBackend;
 
-        auto CreateImportedTexture(rstd::ref<Image>                                  image,
-                                   Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> playback)
+        auto CreateImportedTexture(rstd::ref<Image>                      image,
+                                   Option<Arc<rstd::dyn<VideoPlayback>>> playback)
             -> rstd::Option<PreparedImageAllocation> {
             return rstd::trait_call<0>(this, image, rstd::move(playback));
         }
 
-        auto AllocateTexture(TextureKey key) -> rstd::Option<rstd::sync::Arc<TextureAllocation>> {
+        auto AllocateTexture(TextureKey key) -> rstd::Option<Arc<TextureAllocation>> {
             return rstd::trait_call<1>(this, key);
         }
 
@@ -882,9 +919,8 @@ public:
     Device();
     ~Device();
 
-    static bool Create(Instance&, std::span<const Extension> exts, VkExtent2D extent, Device&);
-    static bool CheckGPU(vvk::PhysicalDevice gpu, std::span<const Extension> exts,
-                         VkSurfaceKHR surface);
+    static bool Create(Instance&, slice<Extension> exts, VkExtent2D extent, Device&);
+    static bool CheckGPU(vvk::PhysicalDevice gpu, slice<Extension> exts, VkSurfaceKHR surface);
 
     void Destroy();
 
@@ -896,11 +932,11 @@ public:
     const vvk::InstanceDispatch& instance_dispatch() const { return *m_instance_dispatch; }
     VkInstance                   instance_handle() const { return m_instance; }
     rstd::uint32_t               instance_api_version() const { return m_instance_api_version; }
-    std::span<const std::string> enabled_instance_extensions() const {
-        return m_enabled_instance_extensions;
+    slice<CString>               enabled_instance_extensions() const {
+        return m_enabled_instance_extensions.as_slice();
     }
-    std::span<const std::string> enabled_device_extensions() const {
-        return m_enabled_device_extensions;
+    slice<CString> enabled_device_extensions() const {
+        return m_enabled_device_extensions.as_slice();
     }
     const auto& limits() const { return m_limits; }
     const auto& memory_allocator() const { return m_allocator; }
@@ -910,13 +946,13 @@ public:
     const auto& capabilities() const { return m_capabilities; }
     void        set_out_extent(VkExtent2D v) { m_extent = v; }
 
-    bool supportExt(std::string_view) const;
+    bool supportExt(ref<str>) const;
 
     VkDeviceSize GetUsage() const;
     auto         MemoryBudget() const -> MemoryBudgetSnapshot;
 
 private:
-    std::vector<VkDeviceQueueCreateInfo> ChooseDeviceQueue(VkSurfaceKHR = {});
+    Vec<VkDeviceQueueCreateInfo> ChooseDeviceQueue(VkSurfaceKHR = {});
 
     const vvk::InstanceDispatch* m_instance_dispatch {};
     vvk::DeviceDispatch          dld;
@@ -926,11 +962,11 @@ private:
     vvk::PhysicalDevice          m_gpu;
     vvk::MemoryAllocator         m_allocator;
 
-    VkPhysicalDeviceLimits             m_limits;
-    DeviceCapabilities                 m_capabilities;
-    std::set<std::string, std::less<>> m_extensions;
-    std::vector<std::string>           m_enabled_instance_extensions;
-    std::vector<std::string>           m_enabled_device_extensions;
+    VkPhysicalDeviceLimits m_limits;
+    DeviceCapabilities     m_capabilities;
+    BTreeSet<String>       m_extensions { BTreeSet<String>::make() };
+    Vec<CString>           m_enabled_instance_extensions;
+    Vec<CString>           m_enabled_device_extensions;
 
     Swapchain m_swapchain;
 
@@ -970,7 +1006,7 @@ inline bool CreateStagingBuffer(const vvk::MemoryAllocator& allocator, VkDeviceS
 
 class BufferAllocation {
 public:
-    BufferAllocation() = default;
+    BufferAllocation();
     ~BufferAllocation();
 
     BufferAllocation(const BufferAllocation&)            = delete;
@@ -990,9 +1026,9 @@ private:
     friend class BufferManager;
     friend class BufferUploadBatchLease;
 
-    explicit BufferAllocation(std::shared_ptr<State> state);
+    explicit BufferAllocation(Arc<State> state);
 
-    std::shared_ptr<State> m_state;
+    Option<Arc<State>> m_state;
 };
 
 enum class BufferUploadClass
@@ -1023,7 +1059,7 @@ class RecordedBufferUploads {
 public:
     RecordedBufferUploads(const RecordedBufferUploads&)            = delete;
     RecordedBufferUploads& operator=(const RecordedBufferUploads&) = delete;
-    RecordedBufferUploads()                                        = default;
+    RecordedBufferUploads();
     ~RecordedBufferUploads();
 
     RecordedBufferUploads(RecordedBufferUploads&&) noexcept;
@@ -1036,31 +1072,31 @@ private:
     friend class BufferManager;
     friend class BufferUploadBatchLease;
 
-    RecordedBufferUploads(BufferManager* owner, std::shared_ptr<State> state);
+    RecordedBufferUploads(BufferManager* owner, Arc<State> state);
     void Reset();
 
-    BufferManager*         m_owner { nullptr };
-    std::shared_ptr<State> m_state;
+    BufferManager*     m_owner { nullptr };
+    Option<Arc<State>> m_state;
 };
 
 class BufferUploadBatchLease {
 public:
     BufferUploadBatchLease(const BufferUploadBatchLease&)            = delete;
     BufferUploadBatchLease& operator=(const BufferUploadBatchLease&) = delete;
-    BufferUploadBatchLease()                                         = default;
+    BufferUploadBatchLease();
     ~BufferUploadBatchLease();
 
     BufferUploadBatchLease(BufferUploadBatchLease&&) noexcept;
     BufferUploadBatchLease& operator=(BufferUploadBatchLease&&) noexcept;
 
-    bool                                Valid() const noexcept;
-    std::span<const BufferUploadTicket> Tickets() const noexcept;
+    bool                      Valid() const noexcept;
+    slice<BufferUploadTicket> Tickets() const noexcept;
 
 private:
     friend class BufferManager;
-    explicit BufferUploadBatchLease(std::shared_ptr<RecordedBufferUploads::State> state);
+    explicit BufferUploadBatchLease(Arc<RecordedBufferUploads::State> state);
 
-    std::shared_ptr<RecordedBufferUploads::State> m_state;
+    Option<Arc<RecordedBufferUploads::State>> m_state;
 };
 
 class BufferManager {
@@ -1076,14 +1112,13 @@ public:
     void destroy();
 
     Option<BufferAllocation>   Allocate(const BufferAllocationRequest& request);
-    Option<BufferUploadTicket> QueueWrite(BufferAllocation&              allocation,
-                                          std::span<const rstd::uint8_t> data,
-                                          VkDeviceSize                   destination_offset = 0);
+    Option<BufferUploadTicket> QueueWrite(BufferAllocation& allocation, slice<rstd::uint8_t> data,
+                                          VkDeviceSize destination_offset = 0);
 
     bool HasPendingUploads() const noexcept;
     bool RecordPendingUploads(vvk::CommandBuffer& cmd, RecordedBufferUploads& recorded);
     Option<BufferUploadBatchLease> CommitRecordedUploads(RecordedBufferUploads&& recorded);
-    void CancelRecordedUploads(const std::shared_ptr<RecordedBufferUploads::State>& state);
+    void CancelRecordedUploads(const Arc<RecordedBufferUploads::State>& state);
     void Trim();
 
 private:
@@ -1159,22 +1194,21 @@ public:
     const ShaderSpv* getShaderSpv(VkShaderStageFlagBits) const;
     const auto&      pass() const { return m_pass; }
 
-    GraphicsPipeline& setColorBlendStates(std::span<const VkPipelineColorBlendAttachmentState>);
+    GraphicsPipeline& setColorBlendStates(slice<VkPipelineColorBlendAttachmentState>);
     GraphicsPipeline& setColorBlendOptions(VkPipelineColorBlendStateCreateFlags,
                                            const rstd::array<float, 4>&);
     GraphicsPipeline& setLogicOp(bool enable, VkLogicOp);
 
     GraphicsPipeline& setRenderPass(vvk::RenderPass);
     GraphicsPipeline& addStage(Uni_ShaderSpv&&);
-    GraphicsPipeline&
-        addInputAttributeDescription(std::span<const VkVertexInputAttributeDescription>);
-    GraphicsPipeline& addInputBindingDescription(std::span<const VkVertexInputBindingDescription>);
+    GraphicsPipeline& addInputAttributeDescription(slice<VkVertexInputAttributeDescription>);
+    GraphicsPipeline& addInputBindingDescription(slice<VkVertexInputBindingDescription>);
     GraphicsPipeline& setCreateInfoOptions(VkPipelineCreateFlags flags, rstd::uint32_t subpass);
     GraphicsPipeline& setTopology(VkPrimitiveTopology);
     GraphicsPipeline& setPrimitiveRestartEnable(bool);
     GraphicsPipeline& setViewportScissorCount(rstd::uint32_t viewport_count,
                                               rstd::uint32_t scissor_count);
-    GraphicsPipeline& setDynamicStates(std::span<const VkDynamicState>);
+    GraphicsPipeline& setDynamicStates(slice<VkDynamicState>);
     GraphicsPipeline& setSampleCount(VkSampleCountFlagBits);
 
 private:
@@ -1183,24 +1217,24 @@ private:
     VkPipelineCreateFlags m_create_flags { 0 };
     rstd::uint32_t        m_subpass { 0 };
 
-    VkPipelineInputAssemblyStateCreateInfo         m_input_assembly {};
-    std::vector<VkVertexInputBindingDescription>   m_input_bind_descriptions;
-    std::vector<VkVertexInputAttributeDescription> m_input_attr_descriptions;
+    VkPipelineInputAssemblyStateCreateInfo m_input_assembly {};
+    Vec<VkVertexInputBindingDescription>   m_input_bind_descriptions;
+    Vec<VkVertexInputAttributeDescription> m_input_attr_descriptions;
 
-    VkPipelineViewportStateCreateInfo                           m_view;
-    VkPipelineColorBlendStateCreateInfo                         m_color;
-    std::vector<VkDynamicState>                                 m_dynamic_states;
-    std::vector<VkPipelineColorBlendAttachmentState>            m_color_attachments;
-    std::map<VkShaderStageFlagBits, Uni_ShaderSpv, std::less<>> m_stage_spv_map;
+    VkPipelineViewportStateCreateInfo        m_view;
+    VkPipelineColorBlendStateCreateInfo      m_color;
+    Vec<VkDynamicState>                      m_dynamic_states;
+    Vec<VkPipelineColorBlendAttachmentState> m_color_attachments;
+    BTreeMap<u32, Uni_ShaderSpv>             m_stage_spv_map;
 };
 
 // ---------- VertexInputState.hpp ----------
 
 struct VertexInputState {
-    VkPipelineInputAssemblyStateCreateInfo         input_assembly;
-    VkPipelineVertexInputStateCreateInfo           input;
-    std::vector<VkVertexInputBindingDescription>   bind_descriptions;
-    std::vector<VkVertexInputAttributeDescription> attr_descriptions;
+    VkPipelineInputAssemblyStateCreateInfo input_assembly;
+    VkPipelineVertexInputStateCreateInfo   input;
+    Vec<VkVertexInputBindingDescription>   bind_descriptions;
+    Vec<VkVertexInputAttributeDescription> attr_descriptions;
 };
 
 // ---------- LocalExSwapchain.hpp ----------
@@ -1213,10 +1247,10 @@ struct LocalExHandle {
 
     LocalExHandle()  = default;
     ~LocalExHandle() = default;
-    LocalExHandle(LocalExHandle&& o) noexcept: handle(o.handle), image(std::move(o.image)) {}
+    LocalExHandle(LocalExHandle&& o) noexcept: handle(o.handle), image(rstd::move(o.image)) {}
     LocalExHandle& operator=(LocalExHandle&& o) noexcept {
         handle = o.handle;
-        image  = std::move(o.image);
+        image  = rstd::move(o.image);
         return *this;
     }
 };
@@ -1231,7 +1265,7 @@ class LocalExSwapchain final : public ::vrento::ExSwapchain,
 public:
     LocalExSwapchain(rstd::array<LocalExHandle, 3> handles, VkExtent2D ext,
                      rstd::uint32_t queue_family)
-        : m_handles(std::move(handles)), m_extent(ext), m_queue_family(queue_family) {
+        : m_handles(rstd::move(handles)), m_extent(ext), m_queue_family(queue_family) {
         int index = 0;
         for (auto& h : m_handles) {
             auto& handle         = h.handle;
@@ -1245,13 +1279,13 @@ public:
             handle.plane0_offset = h.image.plane0_offset;
             handle.plane0_stride = h.image.plane0_stride;
         }
-        m_presented  = &m_handles[usize()].handle;
-        m_ready      = &m_handles[usize(1)].handle;
-        m_inprogress = &m_handles[usize(2)].handle;
+        m_presented.store(&m_handles[usize()].handle);
+        m_ready.store(&m_handles[usize(1)].handle);
+        m_inprogress.store(&m_handles[usize(2)].handle);
     }
 
     ~LocalExSwapchain() override {
-        int fd = m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
+        int fd = m_last_sync_fd.exchange(-1, Ordering::AcqRel);
         if (fd >= 0) ::close(fd);
     }
 
@@ -1287,13 +1321,11 @@ public:
         m_pending_identity = lease.identity;
         auto completion    = MakeCompletionCapability(lease.identity);
         return { .status     = ::vrento::FrameSurfaceAcquireStatus::Acquired,
-                 .lease      = std::move(lease),
-                 .completion = std::move(completion) };
+                 .lease      = rstd::move(lease),
+                 .completion = rstd::move(completion) };
     }
 
-    int takeLastFrameSyncFd() override {
-        return m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
-    }
+    int takeLastFrameSyncFd() override { return m_last_sync_fd.exchange(-1, Ordering::AcqRel); }
 
     ::vrento::ExHandle* eatFrame() override {
         return this->TripleSwapchain<::vrento::ExHandle>::eatFrame();
@@ -1308,8 +1340,7 @@ public:
 
     bool ready() const override { return true; }
 
-    void
-    setOnReadyChanged(std::function<void(const ::vrento::ExSwapchainReadyEvent&)> cb) override {
+    void setOnReadyChanged(Option<::vrento::ExSwapchainReadyCallback> cb) override {
         if (cb) {
             ::vrento::ExSwapchainReadyEvent e {
                 .ready  = true,
@@ -1317,14 +1348,14 @@ public:
                 .height = m_extent.height,
                 .format = VK_FORMAT_R8G8B8A8_UNORM,
             };
-            cb(e);
+            (*cb)->operator()(e);
         }
     }
 
 protected:
-    std::atomic<::vrento::ExHandle*>& presented() override { return m_presented; }
-    std::atomic<::vrento::ExHandle*>& ready() override { return m_ready; }
-    std::atomic<::vrento::ExHandle*>& inprogress() override { return m_inprogress; }
+    Atomic<::vrento::ExHandle*>& presented() override { return m_presented; }
+    Atomic<::vrento::ExHandle*>& ready() override { return m_ready; }
+    Atomic<::vrento::ExHandle*>& inprogress() override { return m_inprogress; }
 
 private:
     ::vrento::FrameSurfaceCompletionResult CompleteRendered(::vrento::FrameSurfaceIdentity identity,
@@ -1342,7 +1373,7 @@ private:
         m_surface_pending  = false;
         m_pending_identity = {};
         if (acquire_sync_fd >= 0) {
-            int old = m_last_sync_fd.exchange(acquire_sync_fd, std::memory_order_acq_rel);
+            int old = m_last_sync_fd.exchange(acquire_sync_fd, Ordering::AcqRel);
             if (old >= 0) ::close(old);
         }
         this->renderFrame();
@@ -1365,31 +1396,31 @@ private:
         return { .status = ::vrento::FrameSurfaceCompletionStatus::Aborted, .identity = identity };
     }
 
-    rstd::array<LocalExHandle, 3>    m_handles;
-    std::atomic<::vrento::ExHandle*> m_presented { nullptr };
-    std::atomic<::vrento::ExHandle*> m_ready { nullptr };
-    std::atomic<::vrento::ExHandle*> m_inprogress { nullptr };
-    VkExtent2D                       m_extent;
-    rstd::uint32_t                   m_queue_family { VK_QUEUE_FAMILY_IGNORED };
-    std::atomic<int>                 m_last_sync_fd { -1 };
-    u64                              m_next_acquire_serial { 1 };
-    ::vrento::FrameSurfaceIdentity   m_pending_identity;
-    bool                             m_surface_pending { false };
+    rstd::array<LocalExHandle, 3>  m_handles;
+    Atomic<::vrento::ExHandle*>    m_presented { nullptr };
+    Atomic<::vrento::ExHandle*>    m_ready { nullptr };
+    Atomic<::vrento::ExHandle*>    m_inprogress { nullptr };
+    VkExtent2D                     m_extent;
+    rstd::uint32_t                 m_queue_family { VK_QUEUE_FAMILY_IGNORED };
+    Atomic<int>                    m_last_sync_fd { -1 };
+    u64                            m_next_acquire_serial { 1 };
+    ::vrento::FrameSurfaceIdentity m_pending_identity;
+    bool                           m_surface_pending { false };
 };
 
-inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& device,
-                                                                TextureCache& textures, unsigned w,
-                                                                unsigned h, VkImageTiling tiling) {
+inline Option<ExSwapchainOwner> CreateLocalExSwapchain(const Device& device, TextureCache& textures,
+                                                       unsigned w, unsigned h,
+                                                       VkImageTiling tiling) {
     rstd::array<LocalExHandle, 3> handles;
     for (auto& handle : handles) {
         if (auto rv = textures.CreateExTex(u32(w), u32(h), VK_FORMAT_R8G8B8A8_UNORM, tiling);
             rv.is_some())
             handle.image = rstd::move(rv).unwrap();
         else
-            return nullptr;
+            return None();
     }
-    return std::make_shared<LocalExSwapchain>(
-        std::move(handles), VkExtent2D { w, h }, device.graphics_queue().family_index);
+    return Some(ExSwapchain::Make<LocalExSwapchain>(
+        rstd::move(handles), VkExtent2D { w, h }, device.graphics_queue().family_index));
 }
 
 } // namespace vulkan
@@ -1397,6 +1428,15 @@ inline std::shared_ptr<LocalExSwapchain> CreateLocalExSwapchain(const Device& de
 
 export namespace rstd
 {
+
+template<>
+struct Impl<Copy, vrento::vulkan::Extension> {};
+
+template<typename T>
+    requires requires(T& value) { static_cast<vrento::ExSwapchain&>(value); }
+struct Impl<vrento::ExSwapchainObject, Box<T>> : ImplBase<Box<T>> {
+    auto AsSwapchain() -> vrento::ExSwapchain& { return *this->self(); }
+};
 
 template<>
 struct Impl<Copy, vrento::vulkan::ImageUploadTicket> {};
@@ -1425,9 +1465,8 @@ struct Impl<vrento::vulkan::BufferBackend, vrento::vulkan::BufferManager>
         -> Option<vrento::vulkan::BufferUploadTicket> {
         return this->self().QueueWrite(
             *allocation,
-            std::span<const rstd::uint8_t>(
-                reinterpret_cast<const rstd::uint8_t*>(content.as_raw_ptr()),
-                content.len().to_primitive()),
+            slice<rstd::uint8_t>::from_raw_parts(
+                reinterpret_cast<const rstd::uint8_t*>(content.as_raw_ptr()), content.len()),
             destination_offset);
     }
 };
@@ -1453,3 +1492,10 @@ struct Impl<vrento::vulkan::ImagePrepareBackend, vrento::vulkan::ImagePrepareCon
 };
 
 } // namespace rstd
+
+template<typename T, typename... Args>
+auto vrento::ExSwapchain::Make(Args&&... args) -> ExSwapchainOwner {
+    auto owner = ExSwapchainOwner::make(Box<T>::make(rstd::forward<Args>(args)...));
+    owner->AsSwapchain().m_owner = owner.downgrade();
+    return owner;
+}

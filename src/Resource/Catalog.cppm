@@ -7,6 +7,8 @@ import :texture;
 import :buffer;
 import :shader;
 
+using rstd::sync::Arc;
+
 export namespace vrento::resource
 {
 
@@ -42,7 +44,7 @@ struct TextureLoader {
     struct Api {
         using Trait = TextureLoader;
 
-        auto LoadTexture(ref<str> key) const -> Result<rstd::sync::Arc<Image>, ResourceError> {
+        auto LoadTexture(ref<str> key) const -> Result<Arc<Image>, ResourceError> {
             return rstd::trait_call<0>(this, key);
         }
     };
@@ -65,13 +67,12 @@ struct TextureContentProvider {
             return rstd::trait_call<0>(this, request);
         }
 
-        auto OpenTextureLoader() const
-            -> Result<rstd::sync::Arc<dyn<TextureLoader>>, ResourceError> {
+        auto OpenTextureLoader() const -> Result<Arc<dyn<TextureLoader>>, ResourceError> {
             return rstd::trait_call<1>(this);
         }
 
         auto ResolveVideoPlayback(const TextureRequest& request) const
-            -> Option<rstd::sync::Arc<rstd::dyn<VideoPlayback>>> {
+            -> Option<Arc<rstd::dyn<VideoPlayback>>> {
             return rstd::trait_call<2>(this, request);
         }
     };

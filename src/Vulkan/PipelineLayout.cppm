@@ -363,7 +363,7 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
          policy.shared_set->to_primitive() >= descriptor_limits->maxBoundDescriptorSets))
         return Err(resource::ResourceError {
             .kind    = resource::ResourceErrorKind::MissingDefinition,
-            .message = String::make("invalid shared descriptor set index"_str),
+            .message = "invalid shared descriptor set index"_Str,
         });
     Vec<VkDescriptorSetLayoutBinding> global_bindings;
     Vec<GlobalBindingIdentity>        global_identities;
@@ -372,7 +372,7 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
         if (! requirement.pipeline.Valid()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::MissingDefinition,
-                .message = String::make("invalid pipeline layout requirement"_str),
+                .message = "invalid pipeline layout requirement"_Str,
             });
         }
         for (const auto& set : requirement.descriptor_sets) {
@@ -389,9 +389,8 @@ inline auto PlanPipelineLayouts(slice<PipelineLayoutRequirement> requirements,
         const auto end = static_cast<rstd::uint64_t>(range.offset) + range.size;
         if (end > max_push_constant_size.to_primitive()) {
             return Err(resource::ResourceError {
-                .kind = resource::ResourceErrorKind::MissingDefinition,
-                .message =
-                    String::make("pipeline push constant range exceeds the device limit"_str),
+                .kind    = resource::ResourceErrorKind::MissingDefinition,
+                .message = "pipeline push constant range exceeds the device limit"_Str,
             });
         }
     }

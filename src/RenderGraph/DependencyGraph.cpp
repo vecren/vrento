@@ -1,13 +1,12 @@
 module vrento.rgraph;
 import rstd;
-import cppstd;
 
 using namespace rstd::prelude;
 using namespace vrento::rg;
 
 namespace
 {
-bool SliceContains(rstd::slice<NodeHandle> handles, NodeHandle needle) {
+bool SliceContains(slice<NodeHandle> handles, NodeHandle needle) {
     for (usize index {}; index < handles.len(); ++index) {
         if (handles[index] == needle) return true;
     }
@@ -50,28 +49,28 @@ auto DependencyGraph::EdgeNum() const noexcept -> usize {
     return count;
 }
 
-auto DependencyGraph::GetNodeOut(NodeHandle handle) const -> rstd::slice<NodeHandle> {
+auto DependencyGraph::GetNodeOut(NodeHandle handle) const -> slice<NodeHandle> {
     auto links = m_nodes.get(handle);
-    return links.is_some() ? (**links).outgoing.as_slice() : rstd::slice<NodeHandle> {};
+    return links.is_some() ? (**links).outgoing.as_slice() : slice<NodeHandle> {};
 }
 
-auto DependencyGraph::GetNodeIn(NodeHandle handle) const -> rstd::slice<NodeHandle> {
+auto DependencyGraph::GetNodeIn(NodeHandle handle) const -> slice<NodeHandle> {
     auto links = m_nodes.get(handle);
-    return links.is_some() ? (**links).incoming.as_slice() : rstd::slice<NodeHandle> {};
+    return links.is_some() ? (**links).incoming.as_slice() : slice<NodeHandle> {};
 }
 
-auto DependencyGraph::TopologicalOrder() const -> rstd::vec::Vec<NodeHandle> {
-    auto in_degree = rstd::vec::Vec<usize>::make();
+auto DependencyGraph::TopologicalOrder() const -> Vec<NodeHandle> {
+    auto in_degree = Vec<usize>::make();
     in_degree.resize(NodeNum(), usize());
 
-    auto ready = rstd::vec::Vec<NodeHandle>::make();
+    auto ready = Vec<NodeHandle>::make();
     for (usize index {}; index < NodeNum(); ++index) {
         NodeHandle handle { .index = index };
         in_degree[index] = GetNodeIn(handle).len();
         if (in_degree[index] == usize()) ready.push(NodeHandle { handle });
     }
 
-    auto result = rstd::vec::Vec<NodeHandle>::with_capacity(NodeNum());
+    auto result = Vec<NodeHandle>::with_capacity(NodeNum());
     while (! ready.is_empty()) {
         rstd::slice_::sort_unstable(ready.as_mut_slice().as_mut_ref());
         auto handle = ready.remove(usize());

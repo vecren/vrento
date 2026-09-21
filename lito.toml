@@ -82,6 +82,14 @@ name = "foundation"
 sources = ["tests/foundation.cpp"]
 
 [[test]]
+name = "external-swapchain"
+sources = ["tests/external_swapchain.cpp"]
+
+[[test]]
+name = "extension-names"
+sources = ["tests/extension_names.cpp"]
+
+[[test]]
 name = "uniform"
 sources = ["tests/uniform.cpp"]
 

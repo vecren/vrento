@@ -59,7 +59,7 @@ public:
     }
 
 private:
-    rstd::vec::Vec<PreparedImageBarrier> m_barriers;
+    Vec<PreparedImageBarrier> m_barriers;
 };
 
 } // namespace vrento::resource_registry

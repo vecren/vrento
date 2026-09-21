@@ -3,14 +3,16 @@ import rstd;
 import vrento.resource_registry;
 using namespace rstd::prelude;
 using namespace rstd::literals;
+using rstd::sync::atomic::Atomic;
+using rstd::sync::atomic::Ordering;
 
 namespace vrento
 {
 namespace
 {
 u64 next_allocation_generation() {
-    static rstd::sync::atomic::Atomic<u64> next { u64(1) };
-    return next.fetch_add(u64(1), rstd::sync::atomic::Ordering::Relaxed);
+    static Atomic<u64> next { u64(1) };
+    return next.fetch_add(u64(1), Ordering::Relaxed);
 }
 
 bool ValidBuffer(const GeometryBufferView& view) {
@@ -108,10 +110,10 @@ auto RenderBufferResolver::updateDynamicDrawBuffers(
     auto        count    = DrawCount(geometry);
     if (count.is_none())
         return Err(DrawBufferUpdateError { DrawBufferUpdateErrorKind::InvalidGeometry,
-                                           String::make("invalid geometry range"_str) });
+                                           "invalid geometry range"_Str });
     auto reprepare = [] {
         return Err(DrawBufferUpdateError { DrawBufferUpdateErrorKind::NeedsReprepare,
-                                           String::make("geometry binding changed"_str) });
+                                           "geometry binding changed"_Str });
     };
     if (buffers.render_item != request.render_item || buffers.dynamic != geometry.dynamic ||
         (buffers.dynamic && request.dynamic_allocation_generation != u64() &&

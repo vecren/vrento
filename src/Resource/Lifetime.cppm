@@ -5,6 +5,8 @@ import vrento.vulkan;
 
 import :prepared;
 
+using rstd::collections::HashMap;
+
 export namespace vrento::resource_registry
 {
 
@@ -67,23 +69,23 @@ public:
     auto InFlight() const noexcept -> usize { return m_in_flight.len(); }
 
 private:
-    u64                                          m_next_value { 0 };
-    Option<resource::ReadyToken>                 m_pending;
-    rstd::collections::HashMap<u64, UploadLease> m_in_flight;
+    u64                          m_next_value { 0 };
+    Option<resource::ReadyToken> m_pending;
+    HashMap<u64, UploadLease>    m_in_flight;
 };
 
 struct SubmissionLease {
-    resource::CompletionToken                completion;
-    u64                                      program_generation { 0 };
-    rstd::vec::Vec<PreparedTextureLease>     textures;
-    rstd::vec::Vec<PreparedBufferLease>      buffers;
-    rstd::vec::Vec<PreparedShaderLease>      shaders;
-    rstd::vec::Vec<PreparedPipelineLease>    pipelines;
-    rstd::vec::Vec<PreparedRenderPassLease>  render_passes;
-    rstd::vec::Vec<PreparedFramebufferLease> framebuffers;
-    rstd::vec::Vec<PreparedDescriptorLease>  descriptors;
-    rstd::vec::Vec<PreparedExternalLease>    externals;
-    Option<vulkan::BufferUploadBatchLease>   buffer_uploads;
+    resource::CompletionToken              completion;
+    u64                                    program_generation { 0 };
+    Vec<PreparedTextureLease>              textures;
+    Vec<PreparedBufferLease>               buffers;
+    Vec<PreparedShaderLease>               shaders;
+    Vec<PreparedPipelineLease>             pipelines;
+    Vec<PreparedRenderPassLease>           render_passes;
+    Vec<PreparedFramebufferLease>          framebuffers;
+    Vec<PreparedDescriptorLease>           descriptors;
+    Vec<PreparedExternalLease>             externals;
+    Option<vulkan::BufferUploadBatchLease> buffer_uploads;
 };
 
 class SubmissionTracker {
@@ -128,8 +130,8 @@ public:
     auto InFlight() const noexcept -> usize { return m_in_flight.len(); }
 
 private:
-    u64                                              m_next_value { 0 };
-    rstd::collections::HashMap<u64, SubmissionLease> m_in_flight;
+    u64                           m_next_value { 0 };
+    HashMap<u64, SubmissionLease> m_in_flight;
 };
 
 } // namespace vrento::resource_registry

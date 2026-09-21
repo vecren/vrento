@@ -21,7 +21,7 @@ struct PassNode {
     NodeHandle handle;
     PassHandle pass;
     Type       type { Type::CustomShader };
-    String     name { String::make("unknown pass"_str) };
+    String     name { "unknown pass"_Str };
 
     auto Handle() const noexcept -> NodeHandle { return handle; }
     auto ToGraphviz() const -> String;

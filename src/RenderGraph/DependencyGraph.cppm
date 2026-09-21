@@ -2,6 +2,7 @@ export module vrento.rgraph:dependency_graph;
 import rstd;
 
 using namespace rstd::prelude;
+using rstd::collections::HashMap;
 
 export namespace vrento::rg
 {
@@ -53,8 +54,8 @@ struct Node {
 };
 
 struct NodeLinks {
-    rstd::vec::Vec<NodeHandle> incoming;
-    rstd::vec::Vec<NodeHandle> outgoing;
+    Vec<NodeHandle> incoming;
+    Vec<NodeHandle> outgoing;
 };
 
 struct DependencyGraph {
@@ -64,14 +65,14 @@ struct DependencyGraph {
     auto Contains(NodeHandle handle) const -> bool;
     auto NodeNum() const noexcept -> usize;
     auto EdgeNum() const noexcept -> usize;
-    auto GetNodeOut(NodeHandle handle) const -> rstd::slice<NodeHandle>;
-    auto GetNodeIn(NodeHandle handle) const -> rstd::slice<NodeHandle>;
+    auto GetNodeOut(NodeHandle handle) const -> slice<NodeHandle>;
+    auto GetNodeIn(NodeHandle handle) const -> slice<NodeHandle>;
 
     auto HasCycle() const -> bool;
-    auto TopologicalOrder() const -> rstd::vec::Vec<NodeHandle>;
+    auto TopologicalOrder() const -> Vec<NodeHandle>;
 
 private:
-    using LinkMap = rstd::collections::HashMap<NodeHandle, NodeLinks>;
+    using LinkMap = HashMap<NodeHandle, NodeLinks>;
 
     usize   m_next_index { 0 };
     LinkMap m_nodes;

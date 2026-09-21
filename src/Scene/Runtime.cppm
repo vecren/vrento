@@ -65,14 +65,14 @@ public:
     void BeforeRender() { UpdateSystems(m_before_render); }
 
 private:
-    void UpdateSystems(rstd::vec::Vec<Box<dyn<RuntimeSystem>>>& systems) {
+    void UpdateSystems(Vec<Box<dyn<RuntimeSystem>>>& systems) {
         auto frame = ref<FrameContext>::from_raw_parts(rstd::addressof(m_frame));
         for (auto& system : systems) system->Update(frame);
     }
 
-    FrameContext                            m_frame;
-    rstd::vec::Vec<Box<dyn<RuntimeSystem>>> m_frame_advance;
-    rstd::vec::Vec<Box<dyn<RuntimeSystem>>> m_before_render;
+    FrameContext                 m_frame;
+    Vec<Box<dyn<RuntimeSystem>>> m_frame_advance;
+    Vec<Box<dyn<RuntimeSystem>>> m_before_render;
 };
 
 } // namespace vrento

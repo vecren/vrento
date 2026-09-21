@@ -133,35 +133,32 @@ struct FakeShaderBackend {
         if (counts != nullptr) ++counts->destroyed;
     }
 
-    bool Preprocess(std::string_view source, ShaderType stage, SourceLang lang,
-                    std::string& output) const {
+    bool Preprocess(ref<str> source, ShaderType stage, SourceLang lang, String& output) const {
         ++counts->preprocess;
         rstd_assert(stage == ShaderType::FRAGMENT && lang == SourceLang::Hlsl);
         if (counts->fail) return false;
-        output = source;
+        output = rstd::into(source);
         return true;
     }
 
-    bool CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> units,
-                                   const ShaderCompOpt&            options,
-                                   std::vector<Uni_ShaderSpv>&     output) const {
+    bool CompileAndLinkShaderUnits(slice<ShaderCompUnit> units, const ShaderCompOpt& options,
+                                   Vec<Uni_ShaderSpv>& output) const {
         ++counts->compile;
-        rstd_assert(units.size() == 1 && options.target == VulkanTarget::Vulkan_1_1);
+        rstd_assert(units.len() == usize(1) && options.target == VulkanTarget::Vulkan_1_1);
         if (counts->fail) return false;
         auto stage         = Box<ShaderSpv>::make();
-        stage->stage       = units.front().stage;
-        stage->entry_point = units.front().entry_point;
-        stage->spirv       = { 0x07230203u };
-        output.push_back(rstd::move(stage));
+        stage->stage       = units[usize()].stage;
+        stage->entry_point = units[usize()].entry_point.clone();
+        stage->spirv.push(0x07230203u);
+        output.push(rstd::move(stage));
         return true;
     }
 
-    bool GenReflect(std::span<const std::vector<unsigned int>> codes, std::vector<Uni_ShaderSpv>&,
-                    ShaderReflected&                           output) const {
+    bool GenReflect(slice<ShaderCode> codes, Vec<Uni_ShaderSpv>&, ShaderReflected& output) const {
         ++counts->reflect;
-        rstd_assert(codes.size() == 1 && codes.front().front() == 0x07230203u);
+        rstd_assert(codes.len() == usize(1) && codes[usize()][usize()] == 0x07230203u);
         if (counts->fail) return false;
-        output.input_location_map.emplace("position", ShaderReflected::Input {});
+        (void)output.input_location_map.insert("position"_Str, ShaderReflected::Input {});
         return true;
     }
 
@@ -186,17 +183,15 @@ struct Impl<RenderObserver, FakeObserver> : ImplBase<FakeObserver> {
 
 template<>
 struct Impl<ShaderBackend, FakeShaderBackend> : ImplBase<FakeShaderBackend> {
-    bool Preprocess(std::string_view source, ShaderType stage, SourceLang lang,
-                    std::string& output) const {
+    bool Preprocess(ref<str> source, ShaderType stage, SourceLang lang, String& output) const {
         return this->self().Preprocess(source, stage, lang, output);
     }
-    bool CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> units,
-                                   const ShaderCompOpt&            options,
-                                   std::vector<Uni_ShaderSpv>&     output) const {
+    bool CompileAndLinkShaderUnits(slice<ShaderCompUnit> units, const ShaderCompOpt& options,
+                                   Vec<Uni_ShaderSpv>& output) const {
         return this->self().CompileAndLinkShaderUnits(units, options, output);
     }
-    bool GenReflect(std::span<const std::vector<unsigned int>> codes,
-                    std::vector<Uni_ShaderSpv>& stages, ShaderReflected& output) const {
+    bool GenReflect(slice<ShaderCode> codes, Vec<Uni_ShaderSpv>& stages,
+                    ShaderReflected& output) const {
         return this->self().GenReflect(codes, stages, output);
     }
 };
@@ -217,7 +212,93 @@ static_assert(TextureSample {}.minFilter == TextureFilter::NEAREST);
 static_assert(! TextureSample {}.compare_enable);
 static_assert(TextureSample {}.border_color == TextureBorderColor::OpaqueBlack);
 
+void CheckImageDataLifetime() {
+    int  released = 0;
+    auto make     = [&] {
+        auto token = Box<int>::make(1);
+        return ImageDataPtr(new rstd::uint8_t[4],
+                            [token = rstd::move(token), &released](rstd::uint8_t* data) {
+                                released += *token;
+                                delete[] data;
+                            });
+    };
+    {
+        auto  first  = make();
+        auto  second = make();
+        auto* pixels = first.get();
+        auto  moved  = rstd::move(first);
+        rstd_assert(! first && moved.get() == pixels && released == 0);
+        second = rstd::move(moved);
+        rstd_assert(! moved && second.get() == pixels && released == 1);
+        second.reset();
+        second.reset();
+        rstd_assert(! second && released == 2);
+    }
+    rstd_assert(released == 2);
+    {
+        ImageDataPtr empty(nullptr, [&](rstd::uint8_t*) {
+            ++released;
+        });
+        auto         moved = rstd::move(empty);
+        moved.reset();
+    }
+    rstd_assert(released == 2);
+    {
+        Vec<ImageData> mipmaps;
+        for (usize i {}; i < usize(20); ++i) {
+            mipmaps.push(ImageData { .data = make() });
+        }
+        rstd_assert(released == 2);
+        mipmaps.truncate(usize(3));
+        rstd_assert(released == 19);
+    }
+    rstd_assert(released == 22);
+}
+
+void CheckPendingImageLifetime() {
+    Device             device;
+    ImageUploadManager uploads(device);
+    rstd_assert(uploads.init());
+    ImageSlots slots;
+    slots.slots.push(AllocatedImageParameters {});
+    auto allocation = rstd::sync::Arc<TextureAllocation>::make(rstd::move(slots));
+    auto weak       = allocation.downgrade();
+    rstd_assert(uploads.QueueTransparentClear(allocation.clone()).is_some());
+    allocation.reset();
+    rstd_assert(! weak.expired() && uploads.HasPendingUploads());
+    uploads.Trim();
+    rstd_assert(! weak.expired());
+    uploads.DiscardPendingUploads();
+    rstd_assert(weak.expired() && ! uploads.HasPendingUploads());
+    ImageSlots invalid_slots;
+    invalid_slots.slots.push(AllocatedImageParameters {});
+    auto  invalid      = rstd::sync::Arc<TextureAllocation>::make(rstd::move(invalid_slots));
+    auto  invalid_weak = invalid.downgrade();
+    Image image;
+    image.slots.push(Image::Slot {});
+    rstd_assert(uploads.QueueWrite(invalid.clone(), image).is_none());
+    invalid.reset();
+    rstd_assert(invalid_weak.expired() && ! uploads.HasPendingUploads());
+    uploads.DiscardPendingUploads();
+    uploads.destroy();
+
+    RecordedBufferUploads  buffers;
+    RecordedImageUploads   images;
+    BufferUploadBatchLease buffer_lease;
+    ImageUploadBatchLease  image_lease;
+    rstd_assert(! buffers.Valid() && ! images.Valid());
+    rstd_assert(! buffer_lease.Valid() && buffer_lease.Tickets().is_empty());
+    rstd_assert(! image_lease.Valid() && image_lease.Tickets().is_empty());
+
+    BufferAllocation empty;
+    auto             moved = rstd::move(empty);
+    rstd_assert(! empty && ! moved);
+    rstd_assert(moved.buffer() == VK_NULL_HANDLE && moved.offset() == 0 && moved.size() == 0);
+}
+
 int main() {
+    CheckImageDataLifetime();
+    CheckPendingImageLifetime();
     TextureKey key { .width        = i32(32),
                      .height       = i32(16),
                      .usage        = VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -243,9 +324,9 @@ int main() {
     {
         auto image = rstd::sync::Arc<Image>::make();
         rstd_assert(image->header.kind == ImageKind::Pixels);
-        image->slots.resize(1);
-        image->slots.front().mipmaps.resize(1);
-        image->slots.front().mipmaps.front().data =
+        image->slots.push(Image::Slot {});
+        image->slots[usize()].mipmaps.push(ImageData {});
+        image->slots[usize()].mipmaps[usize()].data =
             ImageDataPtr(new rstd::uint8_t[4], [&released](rstd::uint8_t* data) {
                 delete[] data;
                 ++released;
@@ -263,9 +344,9 @@ int main() {
         Option<rstd::sync::Arc<dyn<resource::TextureLoader>>> loader;
         {
             auto image = rstd::sync::Arc<Image>::make();
-            image->slots.resize(1);
-            image->slots.front().mipmaps.resize(1);
-            image->slots.front().mipmaps.front().data =
+            image->slots.push(Image::Slot {});
+            image->slots[usize()].mipmaps.push(ImageData {});
+            image->slots[usize()].mipmaps[usize()].data =
                 ImageDataPtr(new rstd::uint8_t[4], [&released](rstd::uint8_t* data) {
                     delete[] data;
                     ++released;
@@ -314,27 +395,29 @@ int main() {
 
     Counts counts;
     {
-        auto        backend = Box<dyn<ShaderBackend>>::make(FakeShaderBackend(counts));
-        auto        view    = backend.as_ref();
-        std::string preprocessed;
+        auto   backend = Box<dyn<ShaderBackend>>::make(FakeShaderBackend(counts));
+        auto   view    = backend.as_ref();
+        String preprocessed;
         rstd_assert(
-            view->Preprocess("source", ShaderType::FRAGMENT, SourceLang::Hlsl, preprocessed));
-        rstd_assert(preprocessed == "source");
-        std::vector<ShaderCompUnit> units {
-            { ShaderType::FRAGMENT, "source", "entry", SourceLang::Hlsl },
+            view->Preprocess("source"_str, ShaderType::FRAGMENT, SourceLang::Hlsl, preprocessed));
+        rstd_assert(preprocessed.as_str() == "source"_str);
+        rstd::array<ShaderCompUnit, 1> units {
+            ShaderCompUnit { ShaderType::FRAGMENT, "source"_Str, "entry"_Str, SourceLang::Hlsl },
         };
-        std::vector<Uni_ShaderSpv> stages;
-        rstd_assert(view->CompileAndLinkShaderUnits(units, ShaderCompOpt {}, stages));
-        rstd_assert(stages.size() == 1 && stages.front()->entry_point == "entry");
-        std::vector<std::vector<unsigned int>> codes { stages.front()->spirv };
-        ShaderReflected                        reflected;
-        rstd_assert(view->GenReflect(codes, stages, reflected));
-        rstd_assert(reflected.input_location_map.contains("position"));
+        Vec<Uni_ShaderSpv> stages;
+        rstd_assert(view->CompileAndLinkShaderUnits(units.as_slice(), ShaderCompOpt {}, stages));
+        rstd_assert(stages.len() == usize(1) &&
+                    stages[usize()]->entry_point.as_str() == "entry"_str);
+        Vec<ShaderCode> codes;
+        codes.push(stages[usize()]->spirv.clone());
+        ShaderReflected reflected;
+        rstd_assert(view->GenReflect(codes.as_slice(), stages, reflected));
+        rstd_assert(reflected.input_location_map.contains_key("position"_str));
         counts.fail = true;
         rstd_assert(
-            ! view->Preprocess("source", ShaderType::FRAGMENT, SourceLang::Hlsl, preprocessed));
-        rstd_assert(! view->CompileAndLinkShaderUnits(units, ShaderCompOpt {}, stages));
-        rstd_assert(! view->GenReflect(codes, stages, reflected));
+            ! view->Preprocess("source"_str, ShaderType::FRAGMENT, SourceLang::Hlsl, preprocessed));
+        rstd_assert(! view->CompileAndLinkShaderUnits(units.as_slice(), ShaderCompOpt {}, stages));
+        rstd_assert(! view->GenReflect(codes.as_slice(), stages, reflected));
         rstd_assert(counts.destroyed == 0);
     }
     rstd_assert(counts.preprocess == 2 && counts.compile == 2 && counts.reflect == 2);

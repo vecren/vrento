@@ -1,6 +1,8 @@
 export module vrento.trace;
 import rstd;
 
+using rstd::sync::Arc;
+
 export namespace vrento
 {
 
@@ -43,7 +45,7 @@ struct RenderObserver {
 class RenderTrace {
 public:
     RenderTrace() = default;
-    explicit RenderTrace(rstd::sync::Arc<dyn<RenderObserver>> observer)
+    explicit RenderTrace(Arc<dyn<RenderObserver>> observer)
         : m_observer(Some(rstd::move(observer))) {}
     RenderTrace(const RenderTrace& other)
         : m_observer(other.m_observer.is_some() ? Some(other.m_observer->clone()) : None()) {}
@@ -64,7 +66,7 @@ public:
     }
 
 private:
-    Option<rstd::sync::Arc<dyn<RenderObserver>>> m_observer;
+    Option<Arc<dyn<RenderObserver>>> m_observer;
 };
 
 class RenderScopeGuard {
