@@ -132,5 +132,5 @@ options = [
 rstd-std = { version = "0.1.0", pub = true }
 rstd-cppstd = { version = "0.1.0", pub = true }
 rstd-log = { version = "0.1.0", pub = true }
-vvk = { git = "https://github.com/litocpp/vvk.git", pub = true }
+vvk = { version = "0.1.0", pub = true }
 wavsen = { git = "https://github.com/hypengw/wavsen.git" }
