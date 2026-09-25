@@ -24,6 +24,15 @@ struct TexturePlanEntry {
     String           allocation_key;
     ResourceAccess   access { ResourceAccess::Read };
     u32              version { 0 };
+
+    void UpdateRequest(TextureRequest updated) {
+        // Frame-boundary retention belongs to the graph, not the refreshed image definition.
+        if ((request.content & TextureContentFlag(TextureContent::PreserveAcrossFrames)) != u32()) {
+            updated.lifetime = TextureLifetimeClass::Retained;
+            updated.content |= TextureContentFlag(TextureContent::PreserveAcrossFrames);
+        }
+        request = rstd::move(updated);
+    }
 };
 
 struct BufferPlanEntry {
@@ -88,7 +97,7 @@ struct ResourcePlan {
         if (handle.generation != generation) return false;
         for (auto& entry : textures) {
             if (entry.handle != handle) continue;
-            entry.request = rstd::move(request);
+            entry.UpdateRequest(rstd::move(request));
             return true;
         }
         return false;
