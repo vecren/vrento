@@ -867,6 +867,7 @@ struct DeviceCapabilities {
     bool           shader_output_viewport_index { false };
     bool           sampled_depth_d32 { false };
     bool           depth_clamp { false };
+    bool           depth_clip_enable { false };
     rstd::uint32_t max_geometry_output_vertices { 256 };
     rstd::uint32_t max_geometry_total_output_components { 1024 };
     bool           memory_budget { false };
@@ -1189,6 +1190,7 @@ public:
 
     VkPipelineMultisampleStateCreateInfo   multisample {};
     VkPipelineRasterizationStateCreateInfo raster {};
+    Option<bool>                           depth_clip;
     VkPipelineDepthStencilStateCreateInfo  depth {};
 
     const ShaderSpv* getShaderSpv(VkShaderStageFlagBits) const;

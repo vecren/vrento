@@ -72,6 +72,15 @@ int main() {
         next.depth_clamp = false;
     });
     check_change([](auto& next) {
+        next.depth_clip = Some(true);
+    });
+    check_change([](auto& next) {
+        next.depth_clip = Some(false);
+    });
+    check_change([](auto& next) {
+        next.depth_clip = None();
+    });
+    check_change([](auto& next) {
         next.depth_bias = false;
     });
     check_change([](auto& next) {

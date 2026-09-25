@@ -25,6 +25,7 @@ struct PipelineResourceRequest {
     rstd::array<float, 4>                  blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
     VkPipelineDepthStencilStateCreateInfo  depth {};
     VkPipelineRasterizationStateCreateInfo raster {};
+    Option<bool>                           depth_clip;
     VkPipelineMultisampleStateCreateInfo   multisample {};
     VkPipelineCreateFlags                  create_flags { 0 };
     VkPrimitiveTopology                    topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
@@ -155,6 +156,7 @@ struct PipelineResourceDesc {
     rstd::array<float, 4>                  blend_constants { 0.0f, 0.0f, 0.0f, 0.0f };
     VkPipelineDepthStencilStateCreateInfo  depth {};
     VkPipelineRasterizationStateCreateInfo raster {};
+    Option<bool>                           depth_clip;
     VkPipelineMultisampleStateCreateInfo   multisample {};
     VkPipelineCreateFlags                  create_flags { 0 };
     VkPrimitiveTopology                    topology { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
@@ -531,6 +533,7 @@ inline PipelineResourceDesc MakePipelineResourceDesc(const PipelineResourceReque
         .blend_constants          = request.blend_constants,
         .depth                    = request.depth,
         .raster                   = request.raster,
+        .depth_clip               = request.depth_clip,
         .multisample              = request.multisample,
         .create_flags             = request.create_flags,
         .topology                 = request.topology,
@@ -626,6 +629,8 @@ inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceDesc& desc) {
     WritePipelineColorBlendState(writer, desc);
     WritePipelineDepthStencil(writer, desc.depth);
     WritePipelineRaster(writer, desc.raster);
+    writer.writeBool(desc.depth_clip.is_some());
+    if (desc.depth_clip.is_some()) writer.writeBool(*desc.depth_clip);
     WritePipelineMultisample(writer, desc.multisample);
     WritePipelineDynamicStates(writer, desc.dynamic_states.as_slice());
     return ToPipelineCacheKey(rstd::move(writer).finish());

@@ -698,6 +698,7 @@ public:
         pipeline.toDefault();
         pipeline.depth          = desc.depth;
         pipeline.raster         = desc.raster;
+        pipeline.depth_clip     = desc.depth_clip;
         pipeline.multisample    = desc.multisample;
         const auto color_blends = desc.render_pass.has_color_attachment
                                       ? slice<VkPipelineColorBlendAttachmentState>::from_raw_parts(

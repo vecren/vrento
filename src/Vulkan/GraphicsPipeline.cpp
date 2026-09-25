@@ -47,6 +47,7 @@ GraphicsPipeline::GraphicsPipeline() { toDefault(); }
 GraphicsPipeline::~GraphicsPipeline() {}
 
 void GraphicsPipeline::toDefault() {
+    depth_clip     = None();
     m_create_flags = 0;
     m_subpass      = 0;
     m_view         = VkPipelineViewportStateCreateInfo {
@@ -232,6 +233,21 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
         .pVertexAttributeDescriptions = m_input_attr_descriptions.data()
     };
 
+    auto                                               raster_state = raster;
+    VkPipelineRasterizationDepthClipStateCreateInfoEXT clip_state {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_DEPTH_CLIP_STATE_CREATE_INFO_EXT,
+        .pNext = raster_state.pNext,
+        .depthClipEnable = depth_clip.unwrap_or(true) ? VK_TRUE : VK_FALSE,
+    };
+    if (depth_clip.is_some()) {
+        if (device.capabilities().depth_clip_enable) {
+            raster_state.pNext = &clip_state;
+        } else {
+            // Without independent clipping, preserve clipping rather than clamping.
+            if (! *depth_clip && ! device.capabilities().depth_clamp) return false;
+            raster_state.depthClampEnable = ! *depth_clip;
+        }
+    }
     VkGraphicsPipelineCreateInfo create {
         .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext               = nullptr,
@@ -241,7 +257,7 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
         .pVertexInputState   = &input,
         .pInputAssemblyState = &m_input_assembly,
         .pViewportState      = &m_view,
-        .pRasterizationState = &raster,
+        .pRasterizationState = &raster_state,
         .pMultisampleState   = &multisample,
         .pDepthStencilState  = &depth,
         .pColorBlendState    = &m_color,

@@ -15,6 +15,7 @@ struct MaterialPipelineDesc {
     CompareOp    depth_compare { CompareOp::LessEqual };
     CullMode     cull_mode { CullMode::None };
     bool         depth_clamp { false };
+    Option<bool> depth_clip;
     bool         depth_bias { false };
     float        depth_bias_constant {};
     float        depth_bias_clamp {};
@@ -25,8 +26,8 @@ struct MaterialPipelineDesc {
                (a.alpha_write.is_none() || *a.alpha_write == *b.alpha_write) &&
                a.depth_test == b.depth_test && a.depth_write == b.depth_write &&
                a.depth_compare == b.depth_compare && a.cull_mode == b.cull_mode &&
-               a.depth_clamp == b.depth_clamp && a.depth_bias == b.depth_bias &&
-               a.depth_bias_constant == b.depth_bias_constant &&
+               a.depth_clamp == b.depth_clamp && a.depth_clip == b.depth_clip &&
+               a.depth_bias == b.depth_bias && a.depth_bias_constant == b.depth_bias_constant &&
                a.depth_bias_clamp == b.depth_bias_clamp && a.depth_bias_slope == b.depth_bias_slope;
     }
 };

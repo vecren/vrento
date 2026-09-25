@@ -149,9 +149,14 @@ bool Device::Create(Instance& inst, slice<Extension> exts, VkExtent2D extent, De
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
         .pNext = nullptr,
     };
+    const bool has_depth_clip_extension = tested_exts.contains(
+        CStr::from_ptr(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME).to_str().unwrap());
+    VkPhysicalDeviceDepthClipEnableFeaturesEXT supported_depth_clip {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT,
+    };
     VkPhysicalDeviceSynchronization2FeaturesKHR supported_sync2 {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
-        .pNext = nullptr,
+        .pNext = has_depth_clip_extension ? &supported_depth_clip : nullptr,
     };
     VkPhysicalDeviceSamplerYcbcrConversionFeatures supported_ycbcr {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
@@ -202,14 +207,20 @@ bool Device::Create(Instance& inst, slice<Extension> exts, VkExtent2D extent, De
         tested_exts.contains(
             CStr::from_ptr(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME).to_str().unwrap()) &&
         supported_sync2.synchronization2;
+    const bool enable_depth_clip = has_depth_clip_extension && supported_depth_clip.depthClipEnable;
+    VkPhysicalDeviceDepthClipEnableFeaturesEXT enabled_depth_clip {
+        .sType           = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT,
+        .depthClipEnable = VK_TRUE,
+    };
     VkPhysicalDeviceSynchronization2FeaturesKHR enabled_sync2 {
         .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
-        .pNext            = nullptr,
+        .pNext            = enable_depth_clip ? &enabled_depth_clip : nullptr,
         .synchronization2 = enable_sync2 ? VK_TRUE : VK_FALSE,
     };
     VkPhysicalDeviceSamplerYcbcrConversionFeatures enabled_ycbcr {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
-        .pNext = enable_sync2 ? &enabled_sync2 : nullptr,
+        .pNext = enable_sync2 ? static_cast<void*>(&enabled_sync2)
+                              : (enable_depth_clip ? &enabled_depth_clip : nullptr),
         .samplerYcbcrConversion = supported_ycbcr.samplerYcbcrConversion,
     };
     enabled_timeline.pNext = &enabled_ycbcr;
@@ -262,6 +273,7 @@ bool Device::Create(Instance& inst, slice<Extension> exts, VkExtent2D extent, De
         .shader_output_viewport_index         = enable_shader_output_viewport_index,
         .sampled_depth_d32                    = sampled_depth_d32,
         .depth_clamp                          = supported2.features.depthClamp != VK_FALSE,
+        .depth_clip_enable                    = enable_depth_clip,
         .max_geometry_output_vertices         = device.m_limits.maxGeometryOutputVertices,
         .max_geometry_total_output_components = device.m_limits.maxGeometryTotalOutputComponents,
         .memory_budget                        = tested_exts.contains(
