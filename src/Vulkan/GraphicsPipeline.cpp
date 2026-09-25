@@ -211,11 +211,11 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass, VkPipelin
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = nullptr,
             .stage = ::ToVkType(spv->stage),
-            .pName = entry_names[entry_names.len() - usize(1)].as_ptr()
+            .pName = entry_names.last().unwrap()->as_ptr()
         };
         if (auto opt = CreateShaderModule(device.handle(), *spv); opt.is_some()) {
             shader_modules.push(rstd::move(opt).unwrap());
-            info.module = *shader_modules[shader_modules.len() - usize(1)];
+            info.module = *shader_modules.last().unwrap().get();
         }
 
         shaderStages.push(rstd::move(info));
