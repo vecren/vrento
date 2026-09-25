@@ -27,6 +27,7 @@ struct BufferPhysical {
     u64                      generation { 1 };
     u64                      definition_generation { 1 };
     u64                      source_generation { 0 };
+    u64                      source_identity {};
     u64                      submitted_generation { 0 };
     resource::ReadyToken     ready;
 
@@ -82,8 +83,11 @@ public:
         if (existing.is_some() &&
             (**existing)->definition_generation == (**entry).definition_version) {
             if ((**entry).request.lifetime != resource::BufferLifetimeClass::Dynamic) {
-                auto queued =
-                    QueueWrite((**existing).clone(), content, request.content_version, backend);
+                auto queued = QueueWrite((**existing).clone(),
+                                         content,
+                                         request.content_version,
+                                         backend,
+                                         request.content_identity);
                 if (queued.is_err()) return Err(rstd::move(queued).unwrap_err_unchecked());
             }
             return Ok(PreparedBuffer {
@@ -107,7 +111,8 @@ public:
         u64  physical_generation = existing.is_some() ? (**existing)->generation + u64(1) : u64(1);
         auto physical            = Arc<BufferPhysical>::make(
             rstd::move(*allocated), physical_generation, (**entry).definition_version);
-        auto queued = QueueWrite(physical.clone(), content, request.content_version, backend);
+        auto queued = QueueWrite(
+            physical.clone(), content, request.content_version, backend, request.content_identity);
         if (queued.is_err()) return Err(rstd::move(queued).unwrap_err_unchecked());
         (void)m_resources.insert(handle, physical.clone());
         return Ok(PreparedBuffer {
@@ -140,7 +145,11 @@ public:
         }
         auto source_generation = (**physical)->source_generation + u64(1);
         if (source_generation == u64()) source_generation = u64(1);
-        auto queued = QueueWrite((**physical).clone(), content, source_generation, backend);
+        auto queued = QueueWrite((**physical).clone(),
+                                 content,
+                                 source_generation,
+                                 backend,
+                                 (**physical)->source_identity);
         if (queued.is_err()) return queued;
         ++(**entry).content_version;
         if ((**entry).content_version == u64()) (**entry).content_version = u64(1);
@@ -177,9 +186,11 @@ public:
 
 private:
     auto QueueWrite(Arc<BufferPhysical> physical, slice<u8> content, u64 source_generation,
-                    mut_ref<dyn<vulkan::BufferBackend>> backend)
+                    mut_ref<dyn<vulkan::BufferBackend>> backend, u64 source_identity)
         -> Result<empty, resource::ResourceError> {
-        if (physical->source_generation == source_generation) return Ok(empty {});
+        if (physical->source_generation == source_generation &&
+            physical->source_identity == source_identity)
+            return Ok(empty {});
         auto allocation =
             mut_ref<vulkan::BufferAllocation>::from_raw_parts(rstd::addressof(physical->buffer));
         auto ticket = backend->QueueBufferWrite(allocation, content);
@@ -192,6 +203,7 @@ private:
             });
         }
         physical->source_generation = source_generation;
+        physical->source_identity   = source_identity;
         if (ticket->Valid()) {
             (void)m_pending_uploads.insert(ticket->value,
                                            PendingBufferUpload {
@@ -224,7 +236,8 @@ private:
             if ((**entry).request.definition != request.definition) {
                 ++(**entry).definition_version;
             }
-            if ((**entry).request.content_version != request.content_version) {
+            if ((**entry).request.content_version != request.content_version ||
+                (**entry).request.content_identity != request.content_identity) {
                 ++(**entry).content_version;
             }
             (**entry).request = rstd::move(request);

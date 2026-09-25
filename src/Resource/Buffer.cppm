@@ -46,14 +46,17 @@ struct BufferRequest {
     BufferDefinition           definition;
     BufferLifetimeClass        lifetime { BufferLifetimeClass::Retained };
     u64                        content_version { 1 };
+    // Versions are local to a content source; replacing it must invalidate uploads.
+    u64 content_identity {};
 
     auto clone() const -> BufferRequest {
         return BufferRequest {
-            .name            = name.clone(),
-            .source          = source,
-            .definition      = definition,
-            .lifetime        = lifetime,
-            .content_version = content_version,
+            .name             = name.clone(),
+            .source           = source,
+            .definition       = definition,
+            .lifetime         = lifetime,
+            .content_version  = content_version,
+            .content_identity = content_identity,
         };
     }
 };
