@@ -880,9 +880,9 @@ public:
         auto              data  = layout.unwrap();
         auto              bytes = upload.bytes.as_slice();
         VkBufferImageCopy region {};
-        region.imageSubresource = { desc.range.aspect == tex::Aspect::Depth
+        region.imageSubresource = { VkImageAspectFlags(desc.range.aspect == tex::Aspect::Depth
                                         ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                        : VK_IMAGE_ASPECT_COLOR_BIT,
+                                        : VK_IMAGE_ASPECT_COLOR_BIT),
                                     upload.mip,
                                     upload.layer,
                                     1 };
@@ -1605,8 +1605,9 @@ auto TextureContext::CreateView(const tex::TextureRef& texture, tex::ViewDesc de
                     : desc.dimension == tex::Dimension::Array2D ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
                     : desc.range.layer_count == 6               ? VK_IMAGE_VIEW_TYPE_CUBE
                                                                 : VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
-    info.subresourceRange = { desc.range.aspect == tex::Aspect::Depth ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                                                      : VK_IMAGE_ASPECT_COLOR_BIT,
+    info.subresourceRange = { VkImageAspectFlags(desc.range.aspect == tex::Aspect::Depth
+                                                     ? VK_IMAGE_ASPECT_DEPTH_BIT
+                                                     : VK_IMAGE_ASPECT_COLOR_BIT),
                               desc.range.first_mip,
                               desc.range.mip_count,
                               desc.range.first_layer,

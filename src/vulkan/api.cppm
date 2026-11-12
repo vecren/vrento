@@ -1,6 +1,8 @@
 module;
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 // Macros only — VVK_CHECK family.
 #include "vvk/macros.hpp"
@@ -408,8 +410,14 @@ FrameSurfaceCompletionCapability::operator=(FrameSurfaceCompletionCapability&& o
 }
 
 inline FrameSurfaceCompletionResult FrameSurfaceCompletionCapability::Submit(int producer_sync_fd) {
+#if defined(_WIN32)
+    if (producer_sync_fd >= 0)
+        return { .status = FrameSurfaceCompletionStatus::ProtocolError, .identity = m_identity };
+#endif
     if (! valid()) {
+#if !defined(_WIN32)
         if (producer_sync_fd >= 0) ::close(producer_sync_fd);
+#endif
         return {};
     }
     auto owner    = m_owner.take().unwrap();
@@ -1216,6 +1224,7 @@ struct VertexInputState {
 };
 
 // ---------- LocalExSwapchain.hpp ----------
+#if !defined(_WIN32)
 
 struct LocalExHandle {
     LocalExHandle(const LocalExHandle&)               = delete;
@@ -1384,6 +1393,7 @@ private:
     ::vrento::FrameSurfaceIdentity m_pending_identity;
     bool                           m_surface_pending { false };
 };
+#endif
 
 } // namespace vulkan
 } // namespace vrento
