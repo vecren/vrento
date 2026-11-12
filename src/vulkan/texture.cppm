@@ -1986,9 +1986,12 @@ auto TextureContext::Submit(tex::Submission work) -> Result<tex::SubmissionToken
     pending_.reserve(pending_.len() + usize(1));
     pending_values_.reserve(pending_values_.len() + usize(1));
     const auto& queue = signal_->queue.handle;
-    result            = session().observe_result(
-        submitter_ ? (*submitter_)->Submit(queue, info, completion_fence->handle())
-                   : queue.Submit(info, completion_fence->handle()));
+    {
+        auto access = session().queue_access();
+        result = session().observe_result(
+            submitter_ ? (*submitter_)->Submit(queue, info, completion_fence->handle())
+                       : queue.Submit(info, completion_fence->handle()));
+    }
     if (result != VK_SUCCESS) {
         failed_             = true;
         recording.uncertain = true;

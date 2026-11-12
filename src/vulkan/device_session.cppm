@@ -77,6 +77,7 @@ class DeviceSession {
         vvk::DebugUtilsMessenger          debug;
         Device                            device;
         GraphicsResources                 graphics;
+        rstd::sync::Mutex<empty>          queue_access;
         ~State() {
             if (device.handle()) (void)device.handle().WaitIdle();
         }
@@ -92,6 +93,19 @@ class DeviceSession {
     explicit DeviceSession(rstd::sync::Arc<State> state): state_(rstd::move(state)) {}
 
 public:
+    class QueueAccess {
+        rstd::sync::Arc<State> owner_;
+        rstd::sync::MutexGuard<empty> guard_;
+        friend class DeviceSession;
+        QueueAccess(rstd::sync::Arc<State> owner, rstd::sync::MutexGuard<empty> guard)
+            : owner_(rstd::move(owner)), guard_(rstd::move(guard)) {}
+
+    public:
+        QueueAccess(const QueueAccess&) = delete;
+        QueueAccess(QueueAccess&&) = default;
+        auto operator=(const QueueAccess&) -> QueueAccess& = delete;
+        auto operator=(QueueAccess&&) -> QueueAccess& = delete;
+    };
     DeviceSession(const DeviceSession& other): state_(other.state_.clone()) {}
     auto operator=(const DeviceSession& other) -> DeviceSession& {
         if (this != &other) state_ = other.state_.clone();
@@ -192,8 +206,13 @@ public:
     auto observe_result(VkResult result) const -> VkResult {
         return valid() ? state_->device.observe_result(result) : result;
     }
+    // Native queue users must hold this guard during queue operations.
+    auto queue_access() const -> QueueAccess {
+        return QueueAccess(state_.clone(), state_->queue_access.lock().unwrap());
+    }
     auto wait_idle() const -> VkResult {
         if (! valid()) return VK_ERROR_INITIALIZATION_FAILED;
+        auto access = queue_access();
         return observe_result(device().handle().WaitIdle());
     }
     auto device() const -> const Device& { return state_->device; }

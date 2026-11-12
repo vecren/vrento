@@ -728,6 +728,7 @@ private:
 
 struct DeviceCapabilities {
     bool           timeline_semaphore { false };
+    bool           swapchain_maintenance1 { false };
     bool           shader_draw_parameters { false };
     bool           geometry_shader { false };
     bool           synchronization2 { false };

@@ -256,7 +256,7 @@ auto Instance::TryCreate(Instance& inst, slice<Extension> instExts, slice<Instan
     if (enumerated.is_err()) return enumerated;
     auto requested_exts = Vec<Extension>::from(base_inst_exts.as_slice());
     requested_exts.extend_from_slice(instExts);
-    auto exts = detail::SelectExtensionNames(inst.m_extensions, requested_exts.as_slice());
+    auto exts = detail::SelectInstanceExtensionNames(inst.m_extensions, requested_exts.as_slice());
     if (exts.is_err())
         return Err(BackendError { "select instance extensions"_Str,
                                   BackendCause::Unsupported(exts.unwrap_err()) });

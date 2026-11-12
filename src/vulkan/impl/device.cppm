@@ -182,10 +182,8 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
         return Err(BackendError { "select device extensions"_Str,
                                   BackendCause::Unsupported(selected.unwrap_err()) });
     device.m_enabled_device_extensions = rstd::move(selected).unwrap();
-    auto tested_exts_c = Vec<const char*>::with_capacity(device.m_enabled_device_extensions.len());
     auto tested_exts   = BTreeSet<String>::make();
     for (const auto& name : device.m_enabled_device_extensions) {
-        tested_exts_c.push(name.as_ptr());
         tested_exts.insert(String::make(name.as_ref().to_str().unwrap()));
     }
     device.m_instance_dispatch = &inst.inst().Dispatch();
@@ -210,11 +208,26 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
         .pNext = &supported_sync2,
     };
-    const bool maintenance = tested_exts.contains("VK_EXT_swapchain_maintenance1"_str);
+    const bool maintenance_requested = tested_exts.contains("VK_EXT_swapchain_maintenance1"_str);
+    bool maintenance_required = false;
+    for (const auto& ext : exts)
+        if (ext.name == "VK_EXT_swapchain_maintenance1"_str && ext.required)
+            maintenance_required = true;
+    bool surface_maintenance = false;
+    bool properties2 = inst.api_version() >= VK_API_VERSION_1_1 &&
+                       device.m_gpu.GetProperties().apiVersion >= VK_API_VERSION_1_1;
+    for (const auto& name : inst.enabled_extensions()) {
+        auto value = name.as_ref().to_str().unwrap();
+        if (value == "VK_EXT_surface_maintenance1"_str) surface_maintenance = true;
+        if (value == "VK_KHR_get_physical_device_properties2"_str) properties2 = true;
+    }
+    const bool maintenance_dependencies = surface_maintenance && properties2 &&
+        tested_exts.contains("VK_KHR_swapchain"_str);
+    const bool query_maintenance = maintenance_requested && maintenance_dependencies;
     VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_maintenance {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
     };
-    if (maintenance) supported_ycbcr.pNext = &supported_maintenance;
+    if (query_maintenance) supported_ycbcr.pNext = &supported_maintenance;
     supported_maintenance.pNext    = &supported_sync2;
     supported_timeline.pNext       = &supported_ycbcr;
     const bool has_draw_parameters = inst.api_version() >= VK_API_VERSION_1_1 &&
@@ -235,6 +248,22 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
                      : (has_demote ? static_cast<void*>(&supported_demote) : &supported_timeline),
     };
     device.m_gpu.GetFeatures2KHR(supported2);
+    auto maintenance_choice = detail::SelectSwapchainMaintenance(
+        maintenance_requested, maintenance_required, maintenance_dependencies,
+        supported_maintenance.swapchainMaintenance1 != VK_FALSE);
+    if (maintenance_choice.is_err())
+        return Err(BackendError { "select device extensions"_Str,
+                                  BackendCause::Unsupported(maintenance_choice.unwrap_err()) });
+    const bool maintenance = maintenance_choice.unwrap();
+    if (maintenance_requested && ! maintenance) {
+        device.m_enabled_device_extensions.retain([](const auto& name) {
+            return name.as_ref().to_str().unwrap() != "VK_EXT_swapchain_maintenance1"_str;
+        });
+        tested_exts.remove("VK_EXT_swapchain_maintenance1"_str);
+    }
+    auto tested_exts_c = Vec<const char*>::with_capacity(device.m_enabled_device_extensions.len());
+    for (const auto& name : device.m_enabled_device_extensions)
+        tested_exts_c.push(name.as_ptr());
     if (! supported_timeline.timelineSemaphore) {
         return Err(BackendError { "create device"_Str,
                                   BackendCause::Unsupported("timelineSemaphore"_Str) });
@@ -296,9 +325,6 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
         .swapchainMaintenance1 = VK_TRUE,
     };
     if (maintenance) {
-        if (! supported_maintenance.swapchainMaintenance1)
-            return Err(BackendError { "create device"_Str,
-                                      BackendCause::Unsupported("swapchainMaintenance1"_Str) });
         enabled_ycbcr.pNext = &enabled_maintenance;
     }
     enabled_timeline.pNext = &enabled_ycbcr;
@@ -377,6 +403,7 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
     }
     device.m_capabilities = DeviceCapabilities {
         .timeline_semaphore     = true,
+        .swapchain_maintenance1 = maintenance,
         .shader_draw_parameters = enable_draw_parameters,
         .geometry_shader        = supported2.features.geometryShader != VK_FALSE,
         .synchronization2       = enable_sync2,

@@ -70,6 +70,43 @@ TEST(ExtensionNames, Selection) {
     rstd_assert(callback.as_mut_ref()->operator()(vvk::PhysicalDevice {}));
     rstd_assert(calls == 2);
 }
+
+TEST(ExtensionNames, SwapchainMaintenance) {
+    using vrento::vulkan::detail::SelectSwapchainMaintenance;
+    rstd_assert(!SelectSwapchainMaintenance(false, false, false, false).unwrap());
+    rstd_assert(!SelectSwapchainMaintenance(true, false, false, true).unwrap());
+    rstd_assert(!SelectSwapchainMaintenance(true, false, true, false).unwrap());
+    rstd_assert(SelectSwapchainMaintenance(true, false, true, true).unwrap());
+    rstd_assert(SelectSwapchainMaintenance(true, true, false, true).is_err());
+    rstd_assert(SelectSwapchainMaintenance(true, true, true, false).is_err());
+    rstd_assert(SelectSwapchainMaintenance(true, true, true, true).unwrap());
+}
+
+TEST(ExtensionNames, SurfaceMaintenanceDependencies) {
+    using vrento::vulkan::detail::SelectInstanceExtensionNames;
+    auto supported = BTreeSet<String>::make();
+    supported.insert("VK_KHR_surface"_Str);
+    supported.insert("VK_EXT_surface_maintenance1"_Str);
+    array<Extension, 3> requested {
+        Extension { true, "VK_KHR_surface"_str },
+        Extension { false, "VK_KHR_get_surface_capabilities2"_str },
+        Extension { false, "VK_EXT_surface_maintenance1"_str },
+    };
+    auto without_dependency = SelectInstanceExtensionNames(supported, requested.as_slice()).unwrap();
+    rstd_assert(without_dependency.len() == usize(1));
+    requested[usize(2)].required = true;
+    rstd_assert(SelectInstanceExtensionNames(supported, requested.as_slice()).is_err());
+    supported.insert("VK_KHR_get_surface_capabilities2"_Str);
+    rstd_assert(SelectInstanceExtensionNames(supported, requested.as_slice()).unwrap().len() ==
+                usize(3));
+    array<Extension, 2> no_surface {
+        Extension { false, "VK_KHR_get_surface_capabilities2"_str },
+        Extension { false, "VK_EXT_surface_maintenance1"_str },
+    };
+    rstd_assert(SelectInstanceExtensionNames(supported, no_surface.as_slice()).unwrap().is_empty());
+    no_surface[usize()].required = true;
+    rstd_assert(SelectInstanceExtensionNames(supported, no_surface.as_slice()).is_err());
+}
 } // namespace vrento_test::extension_names
 
 namespace vrento_test::device_session
@@ -154,6 +191,38 @@ TEST(DeviceSession, DefaultsAndSharedOwner) {
     rstd_assert(retained->wait_idle() == VK_SUCCESS);
     retained->release_surface();
     rstd_assert(retained->valid() && ! retained->has_surface());
+}
+
+TEST(DeviceSession, OptionalSwapchainMaintenanceWithoutSurface) {
+    array<Extension, 1> extensions {
+        Extension { false, "VK_EXT_swapchain_maintenance1"_str },
+    };
+    auto session = DeviceSession::create({ .device_extensions = extensions.as_slice() }).unwrap();
+    rstd_assert(! session.device().capabilities().swapchain_maintenance1);
+    for (const auto& name : session.device().enabled_device_extensions())
+        rstd_assert(name.as_ref().to_str().unwrap() != "VK_EXT_swapchain_maintenance1"_str);
+}
+
+TEST(DeviceSession, SharedQueueAccess) {
+    auto session = DeviceSession::create().unwrap();
+    auto entered = rstd::sync::Arc<unsigned>::make(0u);
+    Option<rstd::thread::JoinHandle<empty>> worker;
+    {
+        auto access = session.queue_access();
+        worker = Some(rstd::thread::spawn([shared = DeviceSession(session), entered = entered.clone()] {
+            __atomic_store_n(&*entered, 1u, __ATOMIC_RELEASE);
+            auto access = shared.queue_access();
+            __atomic_store_n(&*entered, 2u, __ATOMIC_RELEASE);
+            return empty {};
+        }).unwrap());
+        auto start = rstd::time::Instant::now();
+        while (__atomic_load_n(&*entered, __ATOMIC_ACQUIRE) == 0 &&
+               start.elapsed().as_millis().to_primitive() < 5000)
+            rstd::thread::yield_now();
+        rstd_assert(__atomic_load_n(&*entered, __ATOMIC_ACQUIRE) == 1);
+    }
+    rstd_assert(rstd::move(worker.take().unwrap()).join().is_ok());
+    rstd_assert(__atomic_load_n(&*entered, __ATOMIC_ACQUIRE) == 2);
 }
 
 TEST(DeviceSession, UuidAndApiVersion) {
