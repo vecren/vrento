@@ -1045,3 +1045,59 @@ TEST(TextureVulkan, SurfaceLeaseRecording) {
     rstd_assert(session.validation_errors() == 0);
 }
 } // namespace vrento_test::texture_vulkan
+
+TEST(TextureVulkan, ReadReservationSerializesProducerWrites) {
+    using namespace vrento_test::texture_vulkan;
+    auto             session = vk::DeviceSession::create({ .validation = true }).unwrap();
+    auto             context = vk::TextureContext::create(session).unwrap();
+    tex::TextureDesc desc;
+    desc.extent  = { 8, 8 };
+    auto texture = context.CreateTexture(desc).unwrap();
+    auto view    = context.CreateView(texture, {}).unwrap();
+    auto initial = context.Begin().unwrap();
+    initial.commands()->UseTexture({ view, tex::Access::Sampled, tex::Stages::Fragment }).unwrap();
+    auto token = context.Submit(rstd::move(initial)).unwrap();
+    context.wait(token).unwrap();
+    struct State {
+        rstd::sync::Mutex<empty> mutex;
+        rstd::sync::Condvar      changed;
+        bool                     prepared {}, release {};
+    };
+    auto state  = rstd::sync::Arc<State>::make();
+    auto worker = rstd::thread::spawn([session, view, state = state.clone()] {
+                      auto read =
+                          vk::prepare_texture_read(session, view, tex::Stages::Fragment).unwrap();
+                      auto lock       = state->mutex.lock().unwrap();
+                      state->prepared = true;
+                      state->changed.notify_all();
+                      state->changed.wait_while(lock, [&](auto&) {
+                          return ! state->release;
+                      });
+                      vk::cancel_texture_read(read);
+                  }).unwrap();
+    {
+        auto lock = state->mutex.lock().unwrap();
+        state->changed.wait_while(lock, [&](auto&) {
+            return ! state->prepared;
+        });
+    }
+    auto work = context.Begin().unwrap();
+    EXPECT_EQ(work.commands()
+                  ->UseTexture({ view, tex::Access::TransferDestination, tex::Stages::Transfer })
+                  .unwrap_err()
+                  .kind,
+              tex::ErrorKind::Busy);
+    EXPECT_EQ(vk::prepare_texture_read(session, view, tex::Stages::Fragment).unwrap_err().kind,
+              tex::ErrorKind::Busy);
+    EXPECT_FALSE(texture.ready().valid());
+    {
+        auto lock      = state->mutex.lock().unwrap();
+        state->release = true;
+        state->changed.notify_all();
+    }
+    (void)rstd::move(worker).join();
+    EXPECT_TRUE(work.commands()
+                    ->UseTexture({ view, tex::Access::TransferDestination, tex::Stages::Transfer })
+                    .is_ok());
+    EXPECT_EQ(session.validation_errors(), 0u);
+}

@@ -218,6 +218,7 @@ inline auto mip_extent(const TextureDesc& desc, Count mip) -> Extent {
              rstd::cmp::max(Count(1), desc.extent.height >> mip),
              1 };
 }
+// Shared dependencies support concurrent const queries and reference release.
 struct Dependency {
     using Trait                  = Dependency;
     static constexpr bool direct = false;
@@ -261,6 +262,7 @@ public:
                (! a.valid() || (a.identity() == b.identity() && a.value() == b.value()));
     }
 };
+// Shared resource status implementations support concurrent Check calls.
 struct ResourceStatus {
     using Trait                  = ResourceStatus;
     static constexpr bool direct = false;
@@ -276,7 +278,9 @@ struct AccessState {
     Access access { Access::Undefined };
     Stages stages { Stages::None };
 };
+// Mutable access state is guarded independently for each texture.
 struct StorageState {
+    rstd::sync::Mutex<empty>         mutex;
     Identity                         identity;
     TextureDesc                      desc;
     Arc<dyn<rstd::any::Any>>         backing;
@@ -284,6 +288,7 @@ struct StorageState {
     Option<Arc<dyn<ResourceStatus>>> status;
     Serial                           recording {}, pool {}, writer {}, version {};
     Serial                           content_revision {};
+    Count                            published_reads {};
     Count                            prepared_reads {};
     Count                            prepared_native_reads {};
     SubmissionToken                  last_write, last_use;
@@ -326,8 +331,14 @@ public:
         if (! valid()) return Err(Error { ErrorKind::Invalid });
         return (*state_)->status.is_some() ? (*(*state_)->status)->Check() : Ok(empty {});
     }
-    auto ready() const -> SubmissionToken { return (*state_)->last_write; }
-    auto content_revision() const -> Serial { return (*state_)->content_revision; }
+    auto ready() const -> SubmissionToken {
+        auto lock = (*state_)->mutex.lock().unwrap();
+        return (*state_)->last_write;
+    }
+    auto content_revision() const -> Serial {
+        auto lock = (*state_)->mutex.lock().unwrap();
+        return (*state_)->content_revision;
+    }
 
 private:
     auto backend_state() const -> const Arc<StorageState>& { return *state_; }
@@ -391,14 +402,55 @@ public:
     bool valid() const { return bool(state_); }
     auto texture() const -> const TextureRef& { return (*state_)->texture; }
     auto description() const -> const ViewDesc& { return (*state_)->desc; }
-    bool permits(bool write) const {
-        auto& s = *texture().backend_state();
-        if (! s.pool) return permission_ == Permission::Ordinary;
-        if (permission_ == Permission::Write) return s.writer == version_ && version_ != 0;
-        return ! write && permission_ == Permission::Read && s.version == version_ && ! s.writer;
+    auto check_access(bool write) const -> Result<empty, Error> {
+        if (! valid()) return Err(Error { ErrorKind::Invalid });
+        auto& storage = *texture().backend_state();
+        auto  lock    = storage.mutex.lock().unwrap();
+        if (write && permission_ != Permission::Read && storage.published_reads)
+            return Err(Error { ErrorKind::Busy });
+        if (! permits_locked(storage, write)) return Err(Error { ErrorKind::Invalid });
+        return Ok(empty {});
+    }
+    bool permits(bool write) const { return check_access(write).is_ok(); }
+    // Pins the published version; conflicting writers return Busy until every copy is released.
+    auto share_read() const -> Result<TextureViewRef, Error> {
+        if (! valid()) return Err(Error { ErrorKind::Invalid });
+        auto& storage = *texture().backend_state();
+        auto  lock    = storage.mutex.lock().unwrap();
+        if (! permits_locked(storage, false) || permission_ == Permission::Write)
+            return Err(Error { ErrorKind::Invalid });
+        if (storage.recording) return Err(Error { ErrorKind::Busy });
+        auto result = TextureViewRef(*this);
+        ++storage.published_reads;
+        result.pin_ = Some(Arc<dyn<rstd::any::Any>>::make(ReadLease { texture(), pin_.clone() }));
+        result.permission_ = Permission::Read;
+        return Ok(rstd::move(result));
     }
 
 private:
+    struct ReadLease {
+        TextureRef                       texture;
+        Option<Arc<dyn<rstd::any::Any>>> owner;
+        ReadLease(TextureRef texture, Option<Arc<dyn<rstd::any::Any>>> owner)
+            : texture(rstd::move(texture)), owner(rstd::move(owner)) {}
+        ReadLease(const ReadLease&) = delete;
+        ReadLease(ReadLease&&)      = default;
+        ~ReadLease() {
+            if (! texture.valid()) return;
+            auto& storage = *texture.backend_state();
+            auto  lock    = storage.mutex.lock().unwrap();
+            --storage.published_reads;
+        }
+    };
+    bool permits_locked(const StorageState& storage, bool write) const {
+        if (write && storage.published_reads) return false;
+        if (! storage.pool)
+            return permission_ == Permission::Ordinary ||
+                   (! write && permission_ == Permission::Read);
+        if (permission_ == Permission::Write) return storage.writer == version_ && version_ != 0;
+        return ! write && permission_ == Permission::Read && storage.version == version_ &&
+               ! storage.writer;
+    }
     auto backend() const -> ref<dyn<rstd::any::Any>> { return (*state_)->backing.deref(); }
     auto backend_state() const -> const Arc<ViewState>& { return *state_; }
 };
@@ -436,12 +488,19 @@ private:
     auto backend() const -> ref<dyn<rstd::any::Any>> { return (*state_)->backing.deref(); }
 };
 class Submission;
-// Backend construction and commit hooks; consumers use references and traits.
+// Mutable backend metadata requires Lock; immutable descriptions and backing are shared.
+// Consumers use resource references and traits.
 struct BackendAccess {
     static void Submitted(Submission& work, const SubmissionToken& token = {});
     static void Uncertain(Submission& work);
     static auto Storage(const TextureRef& value) -> const Arc<StorageState>& {
         return value.backend_state();
+    }
+    static auto Lock(const TextureRef& value) -> rstd::sync::MutexGuard<empty> {
+        return Storage(value)->mutex.lock().unwrap();
+    }
+    static bool Permits(const TextureViewRef& value, bool write) {
+        return value.permits_locked(*Storage(value.texture()), write);
     }
     static auto View(const TextureViewRef& value) -> ref<dyn<rstd::any::Any>> {
         return value.backend();
@@ -509,8 +568,8 @@ struct UploadLayout {
     Serial row_bytes {}, rows {}, source_pitch {}, required_bytes {};
 };
 inline auto validate_upload(const TextureUpload& upload) -> Result<UploadLayout, Error> {
-    if (! upload.target.valid() || ! upload.target.permits(true))
-        return Err(Error { ErrorKind::Invalid });
+    auto access = upload.target.check_access(true);
+    if (access.is_err()) return Err(access.unwrap_err());
     auto& desc  = upload.target.texture().description();
     auto  range = upload.target.description().range;
     if (desc.samples != 1 || ! has(desc.usage, Usage::TransferDestination) ||
@@ -551,8 +610,10 @@ inline bool writes(Access access) {
            access == Access::TransferDestination || access == Access::StorageWrite;
 }
 inline auto validate_access(const TextureAccess& use) -> Result<Range, Error> {
-    if (! use.view.valid() || ! use.view.permits(writes(use.access)) || ! Count(use.stages) ||
-        (Count(use.stages) & ~Count(Stages::All)) || (use.discard && ! writes(use.access)))
+    auto allowed = use.view.check_access(writes(use.access));
+    if (allowed.is_err()) return Err(allowed.unwrap_err());
+    if (! Count(use.stages) || (Count(use.stages) & ~Count(Stages::All)) ||
+        (use.discard && ! writes(use.access)))
         return Err(Error { ErrorKind::Invalid });
     Usage required;
     switch (use.access) {

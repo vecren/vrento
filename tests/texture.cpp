@@ -508,3 +508,23 @@ TEST(Texture, SubmissionOutcomes) {
     rstd_assert(uncertainty.uncertain() && dropped == 1);
 }
 } // namespace vrento_test::texture
+
+TEST(TextureSynchronization, PublishedReadLeaseCanBeReleasedOnAnotherThread) {
+    using namespace vrento_test::texture;
+    FakeDevice  device;
+    TextureDesc desc;
+    desc.extent   = { 8, 8 };
+    auto texture  = device.CreateTexture(desc).unwrap();
+    auto original = device.CreateView(texture, {}).unwrap();
+    auto shared   = original.share_read().unwrap();
+    EXPECT_TRUE(shared.permits(false));
+    EXPECT_FALSE(shared.permits(true));
+    EXPECT_EQ(original.check_access(true).unwrap_err().kind, ErrorKind::Busy);
+    auto worker = rstd::thread::spawn([shared = rstd::move(shared)]() mutable {
+                      auto nested = shared.share_read().unwrap();
+                      shared      = {};
+                      EXPECT_TRUE(nested.permits(false));
+                  }).unwrap();
+    (void)rstd::move(worker).join();
+    EXPECT_TRUE(original.check_access(true).is_ok());
+}

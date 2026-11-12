@@ -9,7 +9,7 @@ struct PoolStats {
     Serial acquired {}, published {}, cancelled {}, busy {};
     bool   closed {}, failed {};
 };
-// Device operations and content lease drops run on the device owner thread.
+// Device creation uses its context owner; published leases may be released on other threads.
 class TexturePool {
     struct Slot {
         TextureViewRef  view;
@@ -18,9 +18,10 @@ class TexturePool {
         SubmissionToken pending;
     };
     struct State {
-        Vec<Slot> slots;
-        Serial    version {}, acquired {}, published {}, cancelled {}, busy {};
-        bool      closed {};
+        rstd::sync::Mutex<empty> mutex;
+        Vec<Slot>                slots;
+        Serial                   version {}, acquired {}, published {}, cancelled {}, busy {};
+        bool                     closed {};
     };
     struct WritePin {
         Arc<State> owner;
@@ -29,9 +30,11 @@ class TexturePool {
         bool       active { true };
         WritePin(Arc<State> s, usize i, Serial v): owner(rstd::move(s)), slot(i), version(v) {}
         ~WritePin() {
+            auto lock = owner->mutex.lock().unwrap();
             if (active) {
-                auto& entry                                  = owner->slots[slot];
-                entry.writing                                = false;
+                auto& entry        = owner->slots[slot];
+                auto  storage_lock = BackendAccess::Lock(entry.view.texture());
+                entry.writing      = false;
                 entry.view.texture().backend_state()->writer = 0;
                 ++owner->cancelled;
             }
@@ -43,7 +46,10 @@ class TexturePool {
         ReadPin(Arc<State> s, usize i): owner(rstd::move(s)), slot(i) {
             ++owner->slots[slot].readers;
         }
-        ~ReadPin() { --owner->slots[slot].readers; }
+        ~ReadPin() {
+            auto lock = owner->mutex.lock().unwrap();
+            --owner->slots[slot].readers;
+        }
     };
     Arc<State> state_;
     explicit TexturePool(Arc<State> state): state_(rstd::move(state)) {}
@@ -60,6 +66,7 @@ public:
         Write(Write&&)                         = default;
         auto operator=(Write&&) -> Write&      = default;
         auto view() const -> TextureViewRef {
+            auto lock          = pin_->owner->mutex.lock().unwrap();
             auto result        = pin_->owner->slots[pin_->slot].view;
             result.permission_ = Permission::Write;
             result.version_    = pin_->version;
@@ -67,7 +74,11 @@ public:
             return result;
         }
         void cancel() { pin_.reset(); }
-        bool valid() const { return bool(pin_) && pin_->active; }
+        bool valid() const {
+            if (! pin_) return false;
+            auto lock = pin_->owner->mutex.lock().unwrap();
+            return pin_->active;
+        }
     };
     TexturePool(const TexturePool&)                    = delete;
     auto operator=(const TexturePool&) -> TexturePool& = delete;
@@ -99,34 +110,56 @@ public:
         return Ok(TexturePool(rstd::move(state)));
     }
     auto acquire() -> Result<Write, Error> {
-        if (! state_ || state_->closed) return Err(Error { ErrorKind::Closed });
+        if (! state_) return Err(Error { ErrorKind::Closed });
         for (usize i {}; i < state_->slots.len(); ++i) {
-            auto& slot    = state_->slots[i];
-            auto  checked = slot.view.texture().check();
+            SubmissionToken pending;
+            TextureViewRef  view;
+            {
+                auto lock = state_->mutex.lock().unwrap();
+                if (state_->closed) return Err(Error { ErrorKind::Closed });
+                const auto& slot = state_->slots[i];
+                if (slot.writing || slot.readers) continue;
+                view    = slot.view;
+                pending = slot.pending;
+            }
+            auto checked = view.texture().check();
             if (checked.is_err()) return Err(checked.unwrap_err());
-            auto completed = slot.pending.poll();
+            auto completed = pending.poll();
             if (completed.is_err()) return Err(completed.unwrap_err());
-            if (slot.writing || slot.readers || ! completed.unwrap()) continue;
+            if (! completed.unwrap()) continue;
+            auto lock = state_->mutex.lock().unwrap();
+            if (state_->closed) return Err(Error { ErrorKind::Closed });
+            auto& slot = state_->slots[i];
+            if (slot.writing || slot.readers || ! (slot.pending == pending)) continue;
+            auto  storage_lock = BackendAccess::Lock(slot.view.texture());
+            auto& storage      = *BackendAccess::Storage(slot.view.texture());
+            if (storage.recording || storage.published_reads || storage.prepared_reads) continue;
             if (state_->version == ~Serial {}) return Err(Error { ErrorKind::Invalid });
-            auto pin     = Arc<WritePin>::make(state_.clone(), i, ++state_->version);
-            slot.writing = true;
-            slot.pending = {};
-            slot.view.texture().backend_state()->writer = pin->version;
+            auto pin       = Arc<WritePin>::make(state_.clone(), i, ++state_->version);
+            slot.writing   = true;
+            pending        = rstd::exchange(slot.pending, SubmissionToken {});
+            storage.writer = pin->version;
             ++state_->acquired;
             return Ok(Write(rstd::move(pin)));
         }
+        auto lock = state_->mutex.lock().unwrap();
+        if (state_->closed) return Err(Error { ErrorKind::Closed });
         ++state_->busy;
         return Err(Error { ErrorKind::Busy });
     }
     auto publish(Write write, SubmissionToken submitted) -> Result<TextureViewRef, Error> {
-        if (! state_ || state_->closed) return Err(Error { ErrorKind::Closed });
+        if (! state_) return Err(Error { ErrorKind::Closed });
         if (! write.valid() || &*write.pin_->owner != &*state_ || ! submitted.valid())
             return Err(Error { ErrorKind::Invalid });
-        auto& slot    = state_->slots[write.pin_->slot];
-        auto  checked = slot.view.texture().check();
+        auto checked = state_->slots[write.pin_->slot].view.texture().check();
         if (checked.is_err()) return Err(checked.unwrap_err());
-        auto& storage = *slot.view.texture().backend_state();
-        if (! (storage.last_write == submitted)) return Err(Error { ErrorKind::Invalid });
+        auto lock = state_->mutex.lock().unwrap();
+        if (state_->closed) return Err(Error { ErrorKind::Closed });
+        auto& slot         = state_->slots[write.pin_->slot];
+        auto  storage_lock = BackendAccess::Lock(slot.view.texture());
+        auto& storage      = *BackendAccess::Storage(slot.view.texture());
+        if (! (storage.last_write == submitted) || storage.recording)
+            return Err(Error { ErrorKind::Invalid });
         slot.pending       = submitted;
         slot.writing       = false;
         storage.writer     = 0;
@@ -146,13 +179,19 @@ public:
             result.closed = true;
             return result;
         }
-        result.capacity  = Count(state_->slots.len().to_primitive());
-        result.acquired  = state_->acquired;
-        result.published = state_->published;
-        result.cancelled = state_->cancelled;
-        result.busy      = state_->busy;
-        result.closed    = state_->closed;
-        for (auto& slot : state_->slots) {
+        Vec<Slot> slots;
+        {
+            auto lock        = state_->mutex.lock().unwrap();
+            result.capacity  = Count(state_->slots.len().to_primitive());
+            result.acquired  = state_->acquired;
+            result.published = state_->published;
+            result.cancelled = state_->cancelled;
+            result.busy      = state_->busy;
+            result.closed    = state_->closed;
+            for (const auto& slot : state_->slots)
+                slots.push(Slot { slot.view, slot.writing, slot.readers, slot.pending });
+        }
+        for (const auto& slot : slots) {
             auto checked = slot.view.texture().check();
             if (checked.is_err()) result.failed = true;
             result.writing += slot.writing;
@@ -161,13 +200,16 @@ public:
             if (complete.is_err()) result.failed = true;
             bool pending = complete.is_err() || ! complete.unwrap();
             result.pending += pending;
-            result.available += ! slot.writing && ! slot.readers && ! pending && ! state_->closed &&
-                                checked.is_ok();
+            result.available +=
+                ! slot.writing && ! slot.readers && ! pending && ! result.closed && checked.is_ok();
         }
         return result;
     }
     void close() {
-        if (state_) state_->closed = true;
+        if (state_) {
+            auto lock      = state_->mutex.lock().unwrap();
+            state_->closed = true;
+        }
     }
 };
 } // namespace vrento::texture
