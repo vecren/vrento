@@ -1,5 +1,6 @@
 export module vrento:frame_graph.types;
 import rstd;
+import ligraph;
 
 using namespace rstd::prelude;
 
@@ -167,23 +168,19 @@ struct FrameGraphPlan {
         return result;
     }
     bool precedes(Index before, Index after) const {
+        ligraph::SearchWorkspace workspace;
+        return precedes(before, after, workspace);
+    }
+    bool precedes(Index before, Index after, ligraph::SearchWorkspace& workspace) const {
         if (before >= successors.len().to_primitive() || after >= successors.len().to_primitive() ||
             before == after)
             return false;
-        Vec<Index> pending;
-        Vec<bool>  seen;
-        seen.resize(successors.len(), false);
-        pending.push(rstd::move(before));
-        seen[usize(before)] = true;
-        for (usize i {}; i < pending.len(); ++i)
-            for (auto next : successors[usize(pending[i])]) {
-                if (next == after) return true;
-                if (! seen[usize(next)]) {
-                    seen[usize(next)] = true;
-                    pending.push(Index(next));
-                }
-            }
-        return false;
+        auto view = ligraph::indexed_view(successors.len(), [this](usize node) {
+            return successors[node].iter().map([](auto index) {
+                return usize(*index);
+            });
+        });
+        return ligraph::has_path(view, usize(before), usize(after), workspace).unwrap();
     }
 };
 

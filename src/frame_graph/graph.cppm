@@ -1,6 +1,7 @@
 export module vrento:frame_graph.graph;
 export import :frame_graph.types;
 import rstd;
+import ligraph;
 
 using rstd::collections::HashMap;
 using rstd::collections::HashSet;
@@ -532,26 +533,25 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         if (! available(exported, full_range(data.resources[usize(r)])))
             return Err(Error { ErrorKind::Undefined, {}, exported.resource });
     }
-    Vec<Index> incoming, positions, batches;
+    Vec<Index> positions, batches;
     for (Index i {}; i < data.passes.len().to_primitive(); ++i) {
-        incoming.push(Index(predecessors[usize(i)].len().to_primitive()));
         positions.push(Index(invalid_index));
         batches.push(Index(invalid_index));
     }
-    Vec<Index> ready;
-    for (Index i {}; i < incoming.len().to_primitive(); ++i)
-        if (! incoming[usize(i)]) ready.push(Index(i));
-    while (! ready.is_empty()) {
-        usize chosen {};
-        for (usize i { 1 }; i < ready.len(); ++i)
-            if (ready[i] < ready[chosen]) chosen = i;
-        auto current = ready.remove(chosen);
-        plan.order.push(Index(current));
-        for (auto next : plan.successors[usize(current)])
-            if (--incoming[usize(next)] == 0) ready.push(Index(next));
-    }
-    if (plan.order.len() != data.passes.len()) return Err(Error { ErrorKind::Cycle });
-    HashMap<u32, Index> last_queue;
+    auto topology = ligraph::indexed_view(plan.successors.len(), [&plan](usize node) {
+        return plan.successors[node].iter().map([](auto index) {
+            return usize(*index);
+        });
+    });
+    ligraph::TopoWorkspace ordering;
+    auto                   sorted = ligraph::toposort_min(topology, ordering);
+    if (sorted.is_err())
+        return Err(Error { sorted.unwrap_err().kind == ligraph::ErrorKind::Cycle
+                               ? ErrorKind::Cycle
+                               : ErrorKind::Invalid });
+    for (auto node : *sorted) plan.order.push(Index(node.to_primitive()));
+    ligraph::SearchWorkspace reachability;
+    HashMap<u32, Index>      last_queue;
     for (usize position {}; position < plan.order.len(); ++position) {
         auto p              = plan.order[position];
         positions[usize(p)] = Index(position.to_primitive());
@@ -578,8 +578,9 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                         data.resources[usize(resource_index(other.version.resource))];
                     if (other_resource.storage != resource.storage) continue;
                     if (resource.kind != other_resource.kind ||
-                        (overlaps(resource.kind, use.range, other.range) && ! plan.precedes(p, q) &&
-                         ! plan.precedes(q, p)))
+                        (overlaps(resource.kind, use.range, other.range) &&
+                         ! plan.precedes(p, q, reachability) &&
+                         ! plan.precedes(q, p, reachability)))
                         return Err(Error {
                             ErrorKind::Conflict, data.passes[usize(p)].id, use.version.resource });
                 }
@@ -632,7 +633,8 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                 for (usize k {}; k < i; ++k)
                     if (groups[k].slot == previous.slot)
                         for (auto before : groups[k].uses)
-                            for (auto after : group.uses) safe &= plan.precedes(before, after);
+                            for (auto after : group.uses)
+                                safe &= plan.precedes(before, after, reachability);
                 if (safe) {
                     group.slot = previous.slot;
                     break;

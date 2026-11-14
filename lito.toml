@@ -35,6 +35,7 @@ sources = [
 ]
 
 [dependencies]
+ligraph = { version = "0.1.0", pub = true }
 rstd-std = { version = "0.1.0", pub = true }
 rstd-log = { version = "0.1.0", pub = true }
 vvk = { version = "0.1.0", pub = true }
