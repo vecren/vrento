@@ -22,7 +22,8 @@ enum class TextureFormat
     R11G11B10F,
     R16F,
     R32F,
-    D32FS8
+    D32FS8,
+    BC3_SRGB
 };
 enum class TextureWrap
 {

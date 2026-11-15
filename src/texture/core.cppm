@@ -145,7 +145,8 @@ inline auto format_layout(TextureFormat format) -> FormatLayout {
     switch (format) {
     case TextureFormat::BC1: return { 4, 4, 8 };
     case TextureFormat::BC2:
-    case TextureFormat::BC3: return { 4, 4, 16 };
+    case TextureFormat::BC3:
+    case TextureFormat::BC3_SRGB: return { 4, 4, 16 };
     case TextureFormat::RGB8: return { 1, 1, 3 };
     case TextureFormat::RGBA8:
     case TextureFormat::RGBA8_SRGB:
