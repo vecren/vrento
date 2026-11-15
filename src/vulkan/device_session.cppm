@@ -49,7 +49,7 @@ struct SessionSurfaceFactory {
     struct Api {
         using Trait = SessionSurfaceFactory;
 
-        auto create(VkInstance instance) -> Result<SessionSurface, DeviceSessionError> {
+        auto create(const vvk::Instance& instance) -> Result<SessionSurface, DeviceSessionError> {
             return rstd::trait_call<0>(this, instance);
         }
     };
@@ -150,7 +150,7 @@ public:
             state->debug = vvk::DebugUtilsMessenger(handle, *instance, instance.Dispatch());
         }
         if (surface) {
-            auto created = (*surface)->create(*state->instance.inst());
+            auto created = (*surface)->create(state->instance.inst());
             if (created.is_err()) return Err(created.unwrap_err());
             auto native = created.unwrap();
             if (! native.handle) return Err(DeviceSessionError { DeviceSessionStage::Surface });

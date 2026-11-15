@@ -129,8 +129,8 @@ struct SurfaceFactory {
     int        dropped {};
     bool       fail { true };
 
-    auto create(VkInstance value) -> Result<SessionSurface, DeviceSessionError> {
-        instance = value;
+    auto create(const vvk::Instance& value) -> Result<SessionSurface, DeviceSessionError> {
+        instance = *value;
         if (fail)
             return Err(
                 DeviceSessionError { DeviceSessionStage::Surface, VK_ERROR_OUT_OF_HOST_MEMORY });
@@ -145,7 +145,7 @@ namespace rstd
 template<>
 struct Impl<vrento::vulkan::SessionSurfaceFactory, vrento_test::device_session::SurfaceFactory>
     : ImplBase<vrento_test::device_session::SurfaceFactory> {
-    auto create(VkInstance instance)
+    auto create(const vvk::Instance& instance)
         -> Result<vrento::vulkan::SessionSurface, vrento::vulkan::DeviceSessionError> {
         return this->self().create(instance);
     }
