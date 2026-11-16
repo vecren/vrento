@@ -141,8 +141,9 @@ struct NativeTexture {
 };
 struct NativeView {
     DeviceSession  session;
-    vvk::ImageView view;
-    NativeView(DeviceSession s, vvk::ImageView v): session(rstd::move(s)), view(rstd::move(v)) {}
+    vvk::ImageView view,attachment;
+    bool combined{};
+    NativeView(DeviceSession s,vvk::ImageView v,vvk::ImageView a,bool both):session(rstd::move(s)),view(rstd::move(v)),attachment(rstd::move(a)),combined(both) {}
 };
 struct NativeSampler {
     DeviceSession session;
@@ -167,6 +168,16 @@ inline auto native_view(const tex::TextureViewRef& view) -> Result<VkImageView, 
     auto value = rstd::any::downcast_ref<NativeView>(tex::BackendAccess::View(view));
     if (value.is_none()) return Err(tex::Error { tex::ErrorKind::DeviceMismatch });
     return Ok(*(**value).view);
+}
+inline auto native_attachment_view(const tex::TextureViewRef& view) -> Result<VkImageView,tex::Error> {
+    if(!view.valid())return Err(tex::Error{tex::ErrorKind::Invalid});
+    auto checked=native_texture(view.texture());if(checked.is_err())return Err(checked.unwrap_err());
+    auto value=rstd::any::downcast_ref<NativeView>(tex::BackendAccess::View(view));
+    if(value.is_none())return Err(tex::Error{tex::ErrorKind::DeviceMismatch});
+    const auto layout=tex::format_layout(view.texture().description().format);
+    if(layout.stencil&&view.description().range.aspect==tex::Aspect::Depth&&!(**value).combined)
+        return Err(tex::Error{tex::ErrorKind::Invalid});
+    return Ok((**value).combined?*(**value).attachment:*(**value).view);
 }
 inline auto native_sampler(const tex::SamplerRef& sampler) -> Result<VkSampler, tex::Error> {
     if (! sampler.valid()) return Err(tex::Error { tex::ErrorKind::Invalid });
@@ -223,7 +234,7 @@ inline auto attachment_image(const tex::TextureViewRef& view)
     if (! tex::has(desc.usage, depth ? tex::Usage::DepthAttachment : tex::Usage::ColorAttachment))
         return Err(tex::Error { tex::ErrorKind::Invalid });
     auto image  = native_texture(view.texture());
-    auto native = native_view(view);
+    auto native = native_attachment_view(view);
     if (image.is_err()) return Err(image.unwrap_err());
     if (native.is_err()) return Err(native.unwrap_err());
     auto            extent = tex::mip_extent(desc, view.description().range.first_mip);
@@ -1665,7 +1676,14 @@ auto TextureContext::CreateView(const tex::TextureRef& texture, tex::ViewDesc de
     vvk::ImageView view;
     auto result = session().observe_result(session().device().handle().CreateImageView(info, view));
     if (result != VK_SUCCESS) return Err(texture_error(result));
-    auto owner     = Arc<dyn<rstd::any::Any>>::make(NativeView(session(), rstd::move(view)));
+    vvk::ImageView attachment;
+    bool combined=desc.range.aspect==tex::Aspect::Depth&&tex::format_layout(texture.description().format).stencil&&tex::has(texture.description().usage,tex::Usage::DepthAttachment);
+    if(combined){
+        info.subresourceRange.aspectMask=texture_aspects(texture.description().format);
+        auto attached=session().observe_result(session().device().handle().CreateImageView(info,attachment));
+        if(attached!=VK_SUCCESS)return Err(texture_error(attached));
+    }
+    auto owner=Arc<dyn<rstd::any::Any>>::make(NativeView(session(),rstd::move(view),rstd::move(attachment),combined));
     auto reference = tex::TextureViewRef(texture, desc, rstd::move(owner));
     views_.push(tex::BackendAccess::ViewStorage(reference).downgrade());
     return Ok(rstd::move(reference));
