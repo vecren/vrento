@@ -9,6 +9,172 @@ using namespace rstd::literals;
 export namespace vrento::resource_registry
 {
 
+class SessionHeadlessOutput final : public ExSwapchain {
+public:
+    SessionHeadlessOutput(vulkan::DeviceSession session, vvk::AllocatedImage image,
+                          vvk::ImageView view, VkExtent2D extent, u64 generation)
+        : m_session(rstd::move(session)),
+          m_image(rstd::move(image)),
+          m_view(rstd::move(view)),
+          m_extent(extent),
+          m_generation(generation) {}
+    ~SessionHeadlessOutput() override {
+        const auto result = m_session.wait_idle();
+        if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST)
+            rstd::panic("cannot retire headless output");
+    }
+
+    void poll() override {
+        const auto available = ! m_session.lost();
+        if (available == m_ready) return;
+        m_ready = available;
+        NotifyReady();
+    }
+    auto acquireRenderTarget() -> FrameSurfaceAcquireResult override {
+        poll();
+        if (! ready()) return { .status = FrameSurfaceAcquireStatus::SessionLost };
+        if (m_pending) return { .status = FrameSurfaceAcquireStatus::Busy };
+        if (m_next_acquire_serial == u64())
+            return { .status = FrameSurfaceAcquireStatus::ProtocolError,
+                     .error  = Some(FrameSurfaceError { FrameSurfaceErrorKind::SerialExhausted }) };
+        FrameSurfaceLease lease;
+        lease.identity         = { m_generation, u32(), m_next_acquire_serial++ };
+        lease.image.handle     = m_image.handle();
+        lease.image.view       = *m_view;
+        lease.image.extent     = { m_extent.width, m_extent.height, 1 };
+        lease.image.generation = m_generation;
+        lease.format           = format();
+        lease.initial_layout   = m_defined ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        lease.initial_queue_family = lease.final_queue_family =
+            m_session.device().graphics_queue().family_index;
+        lease.final_layout = VK_IMAGE_LAYOUT_GENERAL;
+        auto completion    = MakeCompletionCapability(lease.identity);
+        if (! lease.valid() || ! completion.valid())
+            return { .status = FrameSurfaceAcquireStatus::ProtocolError,
+                     .error  = Some(FrameSurfaceError { FrameSurfaceErrorKind::InvalidLease }) };
+        m_pending = Some(lease.identity);
+        return { .status     = FrameSurfaceAcquireStatus::Acquired,
+                 .lease      = lease,
+                 .completion = rstd::move(completion) };
+    }
+    unsigned width() const override { return m_extent.width; }
+    unsigned height() const override { return m_extent.height; }
+    VkFormat format() const override { return VK_FORMAT_R8G8B8A8_UNORM; }
+    bool     ready() const override { return ! m_session.lost(); }
+    void     setOnReadyChanged(Option<ExSwapchainReadyCallback> callback) override {
+        m_ready_callback = rstd::move(callback);
+        m_ready          = ready();
+        NotifyReady();
+    }
+
+private:
+    void NotifyReady() {
+        if (! m_ready_callback) return;
+        auto                        callback = m_ready_callback->clone();
+        const ExSwapchainReadyEvent event { m_ready, width(), height(), format() };
+        callback->operator()(event);
+    }
+    auto CompleteRendered(FrameSurfaceIdentity identity, int producer_sync_fd)
+        -> FrameSurfaceCompletionResult override {
+#if defined(__unix__) || defined(__APPLE__)
+        // The producer confirms GPU completion before Submit; there is no external consumer.
+        if (producer_sync_fd >= 0) {
+            auto descriptor = rstd::os::fd::OwnedFd::from_raw_fd(producer_sync_fd);
+        }
+#else
+        if (producer_sync_fd >= 0)
+            return { .status = FrameSurfaceCompletionStatus::ProtocolError, .identity = identity };
+#endif
+        if (! m_pending)
+            return { .status = FrameSurfaceCompletionStatus::NotPending, .identity = identity };
+        if (identity != *m_pending)
+            return { .status = FrameSurfaceCompletionStatus::StaleIdentity, .identity = identity };
+        m_pending = None();
+        if (m_session.lost()) {
+            poll();
+            return { .status = FrameSurfaceCompletionStatus::SessionLost, .identity = identity };
+        }
+        m_defined = true;
+        return { .status = FrameSurfaceCompletionStatus::Submitted, .identity = identity };
+    }
+    auto AbortRenderTarget(FrameSurfaceIdentity identity) -> FrameSurfaceCompletionResult override {
+        if (! m_pending)
+            return { .status = FrameSurfaceCompletionStatus::NotPending, .identity = identity };
+        if (identity != *m_pending)
+            return { .status = FrameSurfaceCompletionStatus::StaleIdentity, .identity = identity };
+        m_pending = None();
+        return { .status = FrameSurfaceCompletionStatus::Aborted, .identity = identity };
+    }
+
+    vulkan::DeviceSession            m_session;
+    vvk::AllocatedImage              m_image;
+    vvk::ImageView                   m_view;
+    VkExtent2D                       m_extent;
+    u64                              m_generation;
+    u64                              m_next_acquire_serial { 1 };
+    Option<FrameSurfaceIdentity>     m_pending;
+    Option<ExSwapchainReadyCallback> m_ready_callback;
+    bool                             m_defined { false };
+    bool                             m_ready { true };
+};
+
+inline auto CreateSessionHeadlessOutput(vulkan::DeviceSession session, unsigned width,
+                                        unsigned height)
+    -> Result<ExSwapchainOwner, resource::ResourceError> {
+    auto failure = [](ref<str> operation, vulkan::BackendCause cause) {
+        return Err(
+            resource::ResourceError::backend({ String::make(operation), rstd::move(cause) }));
+    };
+    if (! width || ! height)
+        return failure("headless output description"_str,
+                       vulkan::BackendCause::Invalid("invalid extent"_Str));
+    if (! session.valid()) return failure("headless output"_str, vulkan::BackendCause::Closed());
+    if (session.lost())
+        return failure("headless output"_str, vulkan::BackendCause::Native(VK_ERROR_DEVICE_LOST));
+    const auto& device  = session.device();
+    const auto  maximum = device.limits().maxImageDimension2D;
+    if (width > maximum || height > maximum)
+        return failure("headless output extent"_str,
+                       vulkan::BackendCause::Unsupported("device image extent"_Str));
+    VkImageCreateInfo info { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    info.imageType   = VK_IMAGE_TYPE_2D;
+    info.format      = VK_FORMAT_R8G8B8A8_UNORM;
+    info.extent      = { width, height, 1 };
+    info.mipLevels   = 1;
+    info.arrayLayers = 1;
+    info.samples     = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling      = VK_IMAGE_TILING_OPTIMAL;
+    info.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vvk::MemoryRequest memory;
+    memory.required = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    auto allocated  = device.memory_allocator().create_image(info, memory);
+    if (allocated.is_err()) {
+        auto error = allocated.unwrap_err();
+        session.observe_result(error.api_result);
+        return failure("allocate headless output"_str,
+                       vulkan::BackendCause::Memory(rstd::move(error)));
+    }
+    auto                  image = allocated.unwrap();
+    VkImageViewCreateInfo description { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    description.image            = image.handle();
+    description.viewType         = VK_IMAGE_VIEW_TYPE_2D;
+    description.format           = info.format;
+    description.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vvk::ImageView view;
+    const auto created = session.observe_result(device.handle().CreateImageView(description, view));
+    if (created != VK_SUCCESS)
+        return failure("create headless output view"_str, vulkan::BackendCause::Native(created));
+    static Atomic<u64> next_generation { u64(1) };
+    const auto         generation = next_generation.fetch_add(u64(1), Ordering::Relaxed);
+    if (generation == u64()) rstd::panic("headless output generation exhausted");
+    return Ok(ExSwapchain::Make<SessionHeadlessOutput>(rstd::move(session),
+                                                       rstd::move(image),
+                                                       rstd::move(view),
+                                                       VkExtent2D { width, height },
+                                                       generation));
+}
+
 #if defined(__linux__)
 class SessionLocalOutput final : public ExSwapchain {
 public:

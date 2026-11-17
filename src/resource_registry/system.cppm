@@ -1024,6 +1024,13 @@ public:
                               VkImageTiling tiling) -> Option<ExSwapchainOwner> {
         return TryCreateLocalSwapchain(device, width, height, tiling).ok();
     }
+    auto TryCreateHeadlessSurface(unsigned width, unsigned height)
+        -> Result<ExSwapchainOwner, resource::ResourceError> {
+        if (! Ready())
+            return Err(resource::ResourceError::backend(
+                { "headless output"_Str, vulkan::BackendCause::Closed() }));
+        return CreateSessionHeadlessOutput(TextureContext().session(), width, height);
+    }
     void ClearTextures() {
         AbortPreparePlan();
         m_prepare_status   = {};
