@@ -165,6 +165,7 @@ struct PlaybackData {
     VideoPlaybackSnapshot snapshot;
     f64                   current {};
     Option<f64>           duration;
+    u64                   ended_seek_sequence {};
 };
 
 struct FakePlayback {
@@ -174,6 +175,7 @@ struct FakePlayback {
         data->current  = current;
         data->duration = duration;
     }
+    void PublishEnded(u64 sequence) const { data->ended_seek_sequence = sequence; }
 };
 
 struct TraceData {
@@ -250,6 +252,7 @@ struct Impl<VideoPlayback, vrento_test::foundation::FakePlayback>
     void PublishTime(f64 current, Option<f64> duration) const {
         this->self().PublishTime(current, duration);
     }
+    void PublishEnded(u64 sequence) const { this->self().PublishEnded(sequence); }
 };
 
 template<>
@@ -425,6 +428,11 @@ TEST(Foundation, Resources) {
     rstd_assert(playback->Snapshot().seek_sequence == u64(7));
     playback->PublishTime(f64(2.5), Some(f64(10)));
     rstd_assert(playback_data.current == f64(2.5) && playback_data.duration == Some(f64(10)));
+    rstd_assert(playback->Snapshot().loop);
+    playback_data.snapshot.loop = false;
+    rstd_assert(! playback->Snapshot().loop);
+    playback->PublishEnded(u64(7));
+    rstd_assert(playback_data.ended_seek_sequence == u64(7));
 
     TraceData trace_data;
     {
