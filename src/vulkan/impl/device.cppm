@@ -177,7 +177,10 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
 
     auto enumerated = EnumateDeviceExts(inst.gpu(), device.m_extensions);
     if (enumerated.is_err()) return enumerated;
-    auto selected = detail::SelectExtensionNames(device.m_extensions, exts);
+    auto requested = Vec<Extension>::from(exts);
+    if (device.m_extensions.contains("VK_KHR_portability_subset"_str))
+        requested.push({ true, "VK_KHR_portability_subset"_str });
+    auto selected = detail::SelectExtensionNames(device.m_extensions, requested.as_slice());
     if (selected.is_err())
         return Err(BackendError { "select device extensions"_Str,
                                   BackendCause::Unsupported(selected.unwrap_err()) });
