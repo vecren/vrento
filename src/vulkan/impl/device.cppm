@@ -69,7 +69,6 @@ auto Device::ValidateGPU(vvk::PhysicalDevice gpu, slice<Extension> exts, VkSurfa
     auto extensions = BTreeSet<String>::make();
     auto enumerated = EnumateDeviceExts(gpu, extensions);
     if (enumerated.is_err()) return enumerated;
-    bool requires_timeline_semaphore { false };
     bool requires_maintenance { false };
     for (auto& ext : exts) {
         if (ext.required) {
@@ -77,27 +76,23 @@ auto Device::ValidateGPU(vvk::PhysicalDevice gpu, slice<Extension> exts, VkSurfa
                 return Err(BackendError { "validate device extensions"_Str,
                                           BackendCause::Unsupported(String::make(ext.name)) });
             if (ext.name == "VK_EXT_swapchain_maintenance1"_str) requires_maintenance = true;
-            if (ext.name ==
-                CStr::from_ptr(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME).to_str().unwrap()) {
-                requires_timeline_semaphore = true;
-            }
         }
     }
+    if (gpu.EffectiveApiVersion() < VK_API_VERSION_1_2 &&
+        ! extensions.contains("VK_KHR_timeline_semaphore"_str))
+        return Err(BackendError { "validate device"_Str,
+                                  BackendCause::Unsupported("timelineSemaphore"_Str) });
     VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance_features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
     };
     VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timeline_features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR,
-        .pNext = nullptr,
+        .pNext = requires_maintenance ? &maintenance_features : nullptr,
     };
     VkPhysicalDeviceFeatures2KHR features2 {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR,
-        .pNext = requires_timeline_semaphore
-                     ? static_cast<void*>(&timeline_features)
-                     : (requires_maintenance ? &maintenance_features : nullptr),
+        .pNext = &timeline_features,
     };
-    if (requires_timeline_semaphore && requires_maintenance)
-        timeline_features.pNext = &maintenance_features;
     gpu.GetFeatures2KHR(features2);
     if (requires_maintenance && ! maintenance_features.swapchainMaintenance1)
         return Err(BackendError { "validate device"_Str,
@@ -107,7 +102,7 @@ auto Device::ValidateGPU(vvk::PhysicalDevice gpu, slice<Extension> exts, VkSurfa
         return Err(BackendError { "validate device"_Str,
                                   BackendCause::Unsupported("geometryShader"_Str) });
 #endif
-    if (requires_timeline_semaphore && ! timeline_features.timelineSemaphore)
+    if (! timeline_features.timelineSemaphore)
         return Err(BackendError { "validate device"_Str,
                                   BackendCause::Unsupported("timelineSemaphore"_Str) });
     return Ok(empty {});
@@ -178,6 +173,8 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
     auto enumerated = EnumateDeviceExts(inst.gpu(), device.m_extensions);
     if (enumerated.is_err()) return enumerated;
     auto requested = Vec<Extension>::from(exts);
+    if (device.m_gpu.EffectiveApiVersion() < VK_API_VERSION_1_2)
+        requested.push({ true, "VK_KHR_timeline_semaphore"_str });
     if (device.m_extensions.contains("VK_KHR_portability_subset"_str))
         requested.push({ true, "VK_KHR_portability_subset"_str });
     auto selected = detail::SelectExtensionNames(device.m_extensions, requested.as_slice());
@@ -367,11 +364,7 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
             "create device"_Str,
             BackendCause::Dispatch(DispatchFailure::capture(created.unwrap_err())) });
 
-    device.m_graphics_queue.handle = device.m_device.GetQueue(device.m_graphics_queue.family_index);
-    device.m_present_queue.handle  = device.m_device.GetQueue(device.m_present_queue.family_index);
-    auto queue_properties          = device.m_gpu.GetQueueFamilyProperties();
-    device.m_present_queue.flags =
-        queue_properties[usize(device.m_present_queue.family_index)].queueFlags;
+    auto queue_properties = device.m_gpu.GetQueueFamilyProperties();
     device.m_queues.clear();
     for (const auto& info : queue_create_infos)
         for (rstd::uint32_t index {}; index < info.queueCount; ++index)
@@ -379,6 +372,13 @@ auto Device::TryCreate(Instance& inst, slice<Extension> exts, VkExtent2D extent,
                                    info.queueFamilyIndex,
                                    queue_properties[usize(info.queueFamilyIndex)].queueFlags,
                                    index });
+    for (const auto& queue : device.m_queues) {
+        if (queue.queue_index != 0) continue;
+        if (queue.family_index == device.m_graphics_queue.family_index)
+            device.m_graphics_queue = queue;
+        if (queue.family_index == device.m_present_queue.family_index)
+            device.m_present_queue = queue;
+    }
     rstd::uint32_t max_push_descriptors {};
     if (tested_exts.contains(
             CStr::from_ptr(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME).to_str().unwrap())) {

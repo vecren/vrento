@@ -450,7 +450,7 @@ using CheckGpuOp = dyn<FnMut<bool(const vvk::PhysicalDevice&)>>;
 
 constexpr auto VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation"_str;
 
-constexpr rstd::uint32_t WP_VULKAN_VERSION { VK_API_VERSION_1_1 };
+constexpr rstd::uint32_t WP_VULKAN_VERSION { VK_API_VERSION_1_2 };
 constexpr const char*    WP_APPLICATION_NAME { "scene render" };
 
 class Device;

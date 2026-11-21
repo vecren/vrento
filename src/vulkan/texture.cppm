@@ -1539,9 +1539,36 @@ auto TextureContext::create_on_queue(DeviceSession session, QueueParameters sele
     for (const auto& queue : session.device().queues())
         found |= *queue.handle == *selected.handle && queue.family_index == selected.family_index &&
                  queue.queue_index == selected.queue_index && queue.flags == selected.flags;
-    if (! found ||
-        ! (selected.flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)))
-        return Err(tex::Error { tex::ErrorKind::Unsupported });
+    if (! found) {
+        auto detail = rstd::format("queue family={} index={} flags={} handle={} is not owned",
+                                   selected.family_index,
+                                   selected.queue_index,
+                                   selected.flags,
+                                   reinterpret_cast<rstd::uintptr_t>(*selected.handle));
+        for (const auto& queue : session.device().queues())
+            detail.push_str(rstd::format("; owned family={} index={} flags={} handle={}",
+                                         queue.family_index,
+                                         queue.queue_index,
+                                         queue.flags,
+                                         reinterpret_cast<rstd::uintptr_t>(*queue.handle))
+                                .as_str());
+        return Err(
+            tex::Error { tex::ErrorKind::Unsupported,
+                         0,
+                         Some(BackendError { "create texture context"_Str,
+                                             BackendCause::Unsupported(rstd::move(detail)) }) });
+    }
+    if (! (selected.flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)))
+        return Err(tex::Error {
+            tex::ErrorKind::Unsupported,
+            0,
+            Some(BackendError {
+                "create texture context"_Str,
+                BackendCause::Unsupported(rstd::format(
+                    "queue family={} index={} has no graphics, compute, or transfer flags={}",
+                    selected.family_index,
+                    selected.queue_index,
+                    selected.flags)) }) });
     static tex::Serial next_signal { 1 };
     auto               signal =
         Arc<QueueSignal>::make(rstd::move(session),
@@ -1560,11 +1587,20 @@ auto TextureContext::create_on_queue(DeviceSession session, QueueParameters sele
     if (pool_result != VK_SUCCESS) return Err(texture_error(pool_result));
     auto result = device.CreateSemaphore(info, signal->semaphore);
     if (result != VK_SUCCESS) return Err(texture_error(result));
-    signal->counter = reinterpret_cast<PFN_vkGetSemaphoreCounterValueKHR>(
-        device.Dispatch().vkGetDeviceProcAddr(*device, "vkGetSemaphoreCounterValueKHR"));
-    signal->wait = reinterpret_cast<PFN_vkWaitSemaphoresKHR>(
-        device.Dispatch().vkGetDeviceProcAddr(*device, "vkWaitSemaphoresKHR"));
-    if (! signal->counter || ! signal->wait) return Err(tex::Error { tex::ErrorKind::Unsupported });
+    signal->counter = device.Dispatch().vkGetSemaphoreCounterValueKHR;
+    signal->wait    = device.Dispatch().vkWaitSemaphoresKHR;
+    if (! signal->counter || ! signal->wait)
+        return Err(
+            tex::Error { tex::ErrorKind::Unsupported,
+                         0,
+                         Some(BackendError {
+                             "create texture context"_Str,
+                             BackendCause::Unsupported(rstd::format(
+                                 "timeline dispatch effective-api={} enabled={} counter={} wait={}",
+                                 device.Dispatch().capabilities.api_version,
+                                 device.Dispatch().capabilities.timeline_semaphore,
+                                 bool(signal->counter),
+                                 bool(signal->wait))) }) });
     return Ok(TextureContext(rstd::move(signal), rstd::move(submitter)));
 }
 auto TextureContext::QuerySupport(const tex::TextureDesc& desc) const -> Result<empty, tex::Error> {
@@ -1742,9 +1778,7 @@ auto import_dependency(const DeviceSession& session, VkSemaphore semaphore, tex:
                        Arc<dyn<rstd::any::Any>> owner) -> Result<tex::SubmissionToken, tex::Error> {
     if (session.lost()) return Err(tex::Error { tex::ErrorKind::Lost, VK_ERROR_DEVICE_LOST });
     if (! semaphore || ! value || ! owner) return Err(tex::Error { tex::ErrorKind::Invalid });
-    auto counter = reinterpret_cast<PFN_vkGetSemaphoreCounterValueKHR>(
-        session.device().handle().Dispatch().vkGetDeviceProcAddr(*session.device().handle(),
-                                                                 "vkGetSemaphoreCounterValueKHR"));
+    auto counter = session.device().handle().Dispatch().vkGetSemaphoreCounterValueKHR;
     if (! counter) return Err(tex::Error { tex::ErrorKind::Unsupported });
     return Ok(tex::SubmissionToken(Arc<dyn<tex::Dependency>>::make(
         ExternalCompletion { session, counter, semaphore, value, rstd::move(owner) })));

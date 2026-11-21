@@ -158,7 +158,6 @@ public:
             state->instance.setSurface(native.handle);
         }
         Vec<Extension> extensions;
-        extensions.push({ true, "VK_KHR_timeline_semaphore"_str });
         extensions.push({ false, "VK_EXT_shader_demote_to_helper_invocation"_str });
         extensions.push({ false, "VK_KHR_shader_float_controls"_str });
         for (const auto& extension : options.device_extensions)
@@ -227,6 +226,47 @@ public:
         state_->device.releaseSwapchain();
         state_->instance.setSurface(VK_NULL_HANDLE);
         // Shared sessions retain the native window after swapchain retirement.
+    }
+    // The caller must retire every swapchain and presentation user first.
+    void detach_surface() {
+        if (! valid()) return;
+        state_->device.releaseSwapchain();
+        state_->instance.setSurface(VK_NULL_HANDLE);
+        state_->native_surface = None();
+    }
+    auto attach_surface(mut_ref<dyn<SessionSurfaceFactory>> factory, VkExtent2D extent,
+                        SwapchainOptions options = {}) -> Result<empty, DeviceSessionError> {
+        if (lost())
+            return Err(DeviceSessionError { DeviceSessionStage::Lost, VK_ERROR_DEVICE_LOST });
+        if (! valid() || has_surface() || ! extent.width || ! extent.height)
+            return Err(DeviceSessionError { DeviceSessionStage::Invalid });
+        if (! state_->instance.inst().Dispatch().capabilities.surface ||
+            ! state_->device.handle().Dispatch().capabilities.swapchain)
+            return Err(DeviceSessionError::from(
+                DeviceSessionStage::Surface,
+                { "attach surface"_Str, BackendCause::Unsupported("surface/swapchain"_Str) }));
+        auto created = factory->create(state_->instance.inst());
+        if (created.is_err()) return Err(created.unwrap_err());
+        auto native = created.unwrap();
+        if (! native.handle) return Err(DeviceSessionError { DeviceSessionStage::Surface });
+        state_->native_surface = Some(rstd::move(native.lifetime));
+        state_->instance.setSurface(native.handle);
+        bool supported {};
+        auto result = observe_result(state_->device.gpu().GetSurfaceSupportKHR(
+            state_->device.present_queue().family_index, native.handle, supported));
+        if (result == VK_SUCCESS && supported)
+            result = observe_result(
+                state_->device.recreateSwapchainResult(native.handle, extent, options));
+        else if (result == VK_SUCCESS)
+            result = VK_ERROR_FEATURE_NOT_PRESENT;
+        if (result != VK_SUCCESS) {
+            detach_surface();
+            return Err(DeviceSessionError { result == VK_ERROR_DEVICE_LOST
+                                                ? DeviceSessionStage::Lost
+                                                : DeviceSessionStage::Surface,
+                                            result });
+        }
+        return Ok(empty {});
     }
     auto validation_errors() const -> unsigned {
         return __atomic_load_n(&state_->errors, __ATOMIC_RELAXED);
