@@ -601,6 +601,7 @@ struct SwapchainOptions {
     VkImageUsageFlags usage { VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT };
     PresentationMode  presentation { PresentationMode::Fifo };
+    Option<VkSurfaceTransformFlagBitsKHR> pre_transform;
 };
 
 class Swapchain {

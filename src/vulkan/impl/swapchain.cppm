@@ -118,6 +118,11 @@ auto Swapchain::CreateResult(Device& device, VkSurfaceKHR surface, VkExtent2D ex
     swap.m_format = *format;
 
     auto& surfaceCapabilities = swap_details.capabilities;
+    const auto pre_transform = options.pre_transform.unwrap_or(surfaceCapabilities.currentTransform);
+    const auto transform_bit = static_cast<unsigned>(pre_transform);
+    if (!transform_bit || (transform_bit & (transform_bit - 1)) ||
+        !(surfaceCapabilities.supportedTransforms & transform_bit))
+        return VK_ERROR_FEATURE_NOT_PRESENT;
 
     rstd::uint32_t image_count = surfaceCapabilities.minImageCount + 1;
     if (surfaceCapabilities.maxImageCount > 0 && image_count > surfaceCapabilities.maxImageCount)
@@ -132,7 +137,6 @@ auto Swapchain::CreateResult(Device& device, VkSurfaceKHR surface, VkExtent2D ex
     auto preferred = modes[unsigned(options.presentation)];
     for (auto available : swap_details.presentModes)
         if (available == preferred) swap.m_present_mode = preferred;
-    VkSurfaceTransformFlagBitsKHR preTransform   = surfaceCapabilities.currentTransform;
     VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     while (!(surfaceCapabilities.supportedCompositeAlpha & compositeAlpha)) {
         compositeAlpha = static_cast<VkCompositeAlphaFlagBitsKHR>(static_cast<unsigned>(compositeAlpha) << 1);
@@ -155,7 +159,7 @@ auto Swapchain::CreateResult(Device& device, VkSurfaceKHR surface, VkExtent2D ex
         .imageSharingMode = separate ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = separate ? 2u : 0u,
         .pQueueFamilyIndices = separate ? families : nullptr,
-        .preTransform     = preTransform,
+        .preTransform     = pre_transform,
         .compositeAlpha   = compositeAlpha,
         .presentMode      = swap.m_present_mode,
         .clipped          = true,
