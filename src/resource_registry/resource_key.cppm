@@ -87,13 +87,17 @@ struct PipelineResourceRequest {
 };
 
 struct PipelineCacheKey {
-    rstd::size_t value { 0 };
-    Vec<u8>      bytes;
+    rstd::size_t    value { 0 };
+    Vec<u8>         bytes;
+    Vec<ShaderCode> shader_codes;
 
-    PipelineCacheKey clone() const { return { .value = value, .bytes = bytes.clone() }; }
-    void             clone_from(const PipelineCacheKey& other) {
+    PipelineCacheKey clone() const {
+        return { .value = value, .bytes = bytes.clone(), .shader_codes = shader_codes.clone() };
+    }
+    void clone_from(const PipelineCacheKey& other) {
         value = other.value;
         bytes.clone_from(other.bytes);
+        shader_codes.clone_from(other.shader_codes);
     }
 };
 
@@ -250,7 +254,8 @@ struct PipelineCacheProbe {
 };
 
 inline bool SamePipelineCacheKey(const PipelineCacheKey& lhs, const PipelineCacheKey& rhs) {
-    return lhs.value == rhs.value && lhs.bytes == rhs.bytes;
+    // Hashes select candidates; retained immutable code resolves content collisions.
+    return lhs.value == rhs.value && lhs.bytes == rhs.bytes && lhs.shader_codes == rhs.shader_codes;
 }
 
 inline bool SameRenderPassCacheKey(const RenderPassCacheKey& lhs, const RenderPassCacheKey& rhs) {
@@ -381,11 +386,12 @@ inline void WriteCacheKey(PipelineKeyWriter& writer, const RenderPassCacheKey& k
     writer.writeBytes(key.bytes.as_slice());
 }
 
-inline void WritePipelineShaderStages(PipelineKeyWriter& writer, slice<ShaderSpv> stages) {
+inline auto WritePipelineShaderStages(PipelineKeyWriter& writer, slice<ShaderSpv> stages)
+    -> Vec<ShaderCode> {
     struct StageRecord {
-        vrento::ShaderType    stage;
-        ref<str>              entry_point;
-        slice<rstd::uint32_t> spirv;
+        vrento::ShaderType stage;
+        ref<str>           entry_point;
+        ref<ShaderCode>    code;
     };
 
     Vec<StageRecord> records;
@@ -394,7 +400,7 @@ inline void WritePipelineShaderStages(PipelineKeyWriter& writer, slice<ShaderSpv
         records.push(StageRecord {
             .stage       = stage.stage,
             .entry_point = stage.entry_point.as_str(),
-            .spirv       = stage.spirv.as_slice(),
+            .code        = ref<ShaderCode>::from_raw_parts(rstd::addressof(stage.spirv)),
         });
     }
     sort_unstable_by(records.as_mut_slice().as_mut_ref(), [](const auto& lhs, const auto& rhs) {
@@ -405,12 +411,15 @@ inline void WritePipelineShaderStages(PipelineKeyWriter& writer, slice<ShaderSpv
     });
 
     writer.writeArraySize(records.len().to_primitive());
+    auto codes = Vec<ShaderCode>::with_capacity(records.len());
     for (const auto& record : records) {
         WritePipelineScalar(writer, record.stage);
         writer.writeString(record.entry_point);
-        writer.writeArraySize(record.spirv.len().to_primitive());
-        for (auto word : record.spirv) writer.writeU32(word);
+        writer.writeArraySize(record.code->len().to_primitive());
+        writer.writeU64(record.code->content_hash().to_primitive());
+        codes.push(record.code->clone());
     }
+    return codes;
 }
 
 inline void WritePipelineVertexInput(PipelineKeyWriter&                       writer,
@@ -684,10 +693,10 @@ inline RenderPassCacheKey MakeRenderPassCacheKey(const RenderPassResourceDesc& d
 
 inline PipelineCacheKey MakePipelineStateKey(const PipelineResourceDesc& desc) {
     PipelineKeyWriter writer;
-    writer.writeString("pipeline-state-v1"_str);
+    writer.writeString("pipeline-state-v2"_str);
     writer.writeU32(desc.create_flags);
     writer.writeU32(desc.subpass);
-    WritePipelineShaderStages(writer, desc.shader_stages.as_slice());
+    auto shader_codes = WritePipelineShaderStages(writer, desc.shader_stages.as_slice());
     writer.writeU64(desc.pipeline_layout.index.to_primitive());
     writer.writeU64(desc.pipeline_layout.generation.to_primitive());
     WritePipelineVertexInput(writer, desc.vertex_bindings.as_slice(), desc.vertex_attrs.as_slice());
@@ -700,13 +709,15 @@ inline PipelineCacheKey MakePipelineStateKey(const PipelineResourceDesc& desc) {
     if (desc.depth_clip.is_some()) writer.writeBool(*desc.depth_clip);
     WritePipelineMultisample(writer, desc.multisample);
     WritePipelineDynamicStates(writer, desc.dynamic_states.as_slice());
-    return ToPipelineCacheKey(rstd::move(writer).finish());
+    auto key         = ToPipelineCacheKey(rstd::move(writer).finish());
+    key.shader_codes = rstd::move(shader_codes);
+    return key;
 }
 
 inline PipelineCacheKey MakePipelineVariantKey(const PipelineCacheKey&       state,
                                                const RenderPassResourceDesc& render_pass) {
     PipelineKeyWriter writer;
-    writer.writeString("pipeline-v4"_str);
+    writer.writeString("pipeline-v5"_str);
     writer.writeU64(static_cast<rstd::uint64_t>(state.value));
     writer.writeBytes(state.bytes.as_slice());
     writer.writeBool(render_pass.has_color_attachment);
@@ -715,7 +726,9 @@ inline PipelineCacheKey MakePipelineVariantKey(const PipelineCacheKey&       sta
     if (render_pass.has_depth_attachment) WritePipelineScalar(writer, render_pass.depth_format);
     writer.writeBool(render_pass.has_resolve_attachment);
     WritePipelineScalar(writer, render_pass.samples);
-    return ToPipelineCacheKey(rstd::move(writer).finish());
+    auto key         = ToPipelineCacheKey(rstd::move(writer).finish());
+    key.shader_codes = state.shader_codes.clone();
+    return key;
 }
 
 inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceDesc& desc) {

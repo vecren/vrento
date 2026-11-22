@@ -45,6 +45,26 @@ TEST(ShaderCode, ComparesContentAndReplacesOnlyOneOwner) {
     EXPECT_EQ(empty.data(), nullptr);
 }
 
+TEST(ShaderCode, ContentHashFollowsFrozenStorage) {
+    const auto                words    = array<rstd::uint32_t, 3> { 0x07230203u, 2u, 3u };
+    auto                      first    = ShaderCode::from(words.as_slice());
+    auto                      equal    = ShaderCode::from(words.as_slice());
+    auto                      retained = first.clone();
+    rstd::hash::DefaultHasher expected;
+    rstd::hash::hash_into(words.len().to_primitive(), expected);
+    for (auto word : words) rstd::hash::hash_into(word, expected);
+    EXPECT_EQ(first.content_hash(), expected.finish());
+    EXPECT_EQ(first.content_hash(), equal.content_hash());
+    first = ShaderCode::from(array<rstd::uint32_t, 3> { 0x07230203u, 2u, 4u }.as_slice());
+    EXPECT_NE(first.content_hash(), retained.content_hash());
+    EXPECT_EQ(retained.content_hash(), equal.content_hash());
+    rstd::hash::DefaultHasher empty;
+    rstd::hash::hash_into(rstd::size_t(), empty);
+    EXPECT_EQ(ShaderCode {}.content_hash(), empty.finish());
+    EXPECT_EQ(ShaderCode {}.clone().content_hash(), empty.finish());
+    EXPECT_EQ(ShaderCode::from(Vec<rstd::uint32_t> {}).content_hash(), empty.finish());
+}
+
 namespace vrento_test::foundation
 {
 struct Counts {

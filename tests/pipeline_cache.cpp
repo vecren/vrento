@@ -121,6 +121,104 @@ TEST(PipelineCache, ClonesShareCodeAndKeysCompareFullContent) {
     EXPECT_EQ(desc_copy.shader_stages[usize()].spirv[usize()], 0x07230203u);
     EXPECT_TRUE(SamePipelineCacheKey(key, MakePipelineCacheKey(desc_copy)));
 }
+
+TEST(PipelineCache, KeyConstructionTimings) {
+    auto                original = request({ u64(1), u64(1) });
+    Vec<rstd::uint32_t> words;
+    words.resize(usize(16384), 0x07230203u);
+    auto code = vrento::ShaderCode::from(rstd::move(words));
+    for (auto& shader : original.shader_stages) shader->spirv = code.clone();
+    auto               desc    = MakePipelineResourceDesc(original);
+    constexpr unsigned samples = 128;
+    usize              checksum {}, key_bytes {};
+    const auto         started = rstd::time::Instant::now();
+    for (unsigned sample {}; sample < samples; ++sample) {
+        auto key = MakePipelineCacheKey(desc);
+        checksum ^= usize(key.value);
+        key_bytes = key.bytes.len();
+    }
+    rstd::io::println("pipeline key: {} shared stages, {} words/stage, {} queries, {:.3} ms, "
+                      "{} key bytes, checksum {}",
+                      desc.shader_stages.len(),
+                      code.len(),
+                      samples,
+                      started.elapsed().as_secs_f64() * 1000,
+                      key_bytes,
+                      checksum);
+    EXPECT_EQ(checksum, usize());
+}
+
+TEST(PipelineCache, ShaderKeysStayCompactAndRetainCode) {
+    auto                original = request({ u64(1), u64(1) });
+    auto                small    = MakePipelineCacheKey(original);
+    Vec<rstd::uint32_t> words;
+    words.resize(usize(16384), 0x07230203u);
+    original.shader_stages[usize()]->spirv = vrento::ShaderCode::from(rstd::move(words));
+    const auto* pointer                    = original.shader_stages[usize()]->spirv.data();
+    auto        large                      = MakePipelineCacheKey(original);
+    EXPECT_EQ(small.bytes.len(), large.bytes.len());
+    EXPECT_LT(large.bytes.len(), usize(1024));
+    ASSERT_EQ(large.shader_codes.len(), usize(2));
+    EXPECT_EQ(large.shader_codes[usize()].data(), pointer);
+    EXPECT_FALSE(SamePipelineCacheKey(small, large));
+    auto retained = large.clone();
+    auto state    = MakePipelineStateKey(MakePipelineResourceDesc(original));
+    auto variant  = MakePipelineVariantKey(state, MakeRenderPassResourceDesc(original));
+    EXPECT_TRUE(SamePipelineCacheKey(large, variant));
+    original.shader_stages.clear();
+    large = {};
+    state = {};
+    EXPECT_EQ(retained.shader_codes[usize()].data(), pointer);
+    EXPECT_EQ(variant.shader_codes[usize()].data(), pointer);
+    EXPECT_EQ(retained.shader_codes[usize()][usize(16383)], 0x07230203u);
+    EXPECT_TRUE(SamePipelineCacheKey(retained, variant));
+}
+
+TEST(PipelineCache, EqualHashAndMetadataStillCheckShaderContent) {
+    auto original = request({ u64(1), u64(1) });
+    auto first    = MakePipelineCacheKey(original);
+    auto words    = Vec<rstd::uint32_t>::from(original.shader_stages[usize()]->spirv.as_slice());
+    words[words.len() - usize(1)] ^= 1u;
+    original.shader_stages[usize()]->spirv = vrento::ShaderCode::from(rstd::move(words));
+    auto different                         = MakePipelineCacheKey(original);
+    different.value                        = first.value;
+    different.bytes                        = first.bytes.clone();
+    EXPECT_FALSE(SamePipelineCacheKey(first, different));
+    auto clone = different.clone();
+    EXPECT_FALSE(SamePipelineCacheKey(first, clone));
+    clone.clone_from(first);
+    EXPECT_TRUE(SamePipelineCacheKey(first, clone));
+    auto pass = MakeRenderPassResourceDesc(original);
+    EXPECT_FALSE(SamePipelineCacheKey(MakePipelineVariantKey(first, pass),
+                                      MakePipelineVariantKey(different, pass)));
+    rstd::collections::HashMap<PipelineCacheKey, u32, rstd::hash::RandomState, PipelineCacheKeyEqual>
+        entries;
+    (void)entries.insert(first.clone(), u32(1));
+    (void)entries.insert(different.clone(), u32(2));
+    EXPECT_EQ(entries.len(), usize(2));
+    EXPECT_EQ(*entries.get(first).unwrap(), u32(1));
+    EXPECT_EQ(*entries.get(different).unwrap(), u32(2));
+}
+
+TEST(PipelineCache, ShaderMetadataAndCodeRemainLiveInputs) {
+    auto original = request({ u64(1), u64(1) });
+    auto key      = MakePipelineCacheKey(original);
+    rstd::mem::swap(original.shader_stages[usize()], original.shader_stages[usize(1)]);
+    EXPECT_TRUE(SamePipelineCacheKey(key, MakePipelineCacheKey(original)));
+    original.shader_stages[usize()]->entry_point = "other"_Str;
+    EXPECT_FALSE(SamePipelineCacheKey(key, MakePipelineCacheKey(original)));
+    original.shader_stages[usize()]->entry_point = "main"_Str;
+    original.shader_stages[usize()]->stage       = vrento::ShaderType::GEOMETRY;
+    EXPECT_FALSE(SamePipelineCacheKey(key, MakePipelineCacheKey(original)));
+    original.shader_stages[usize()]->stage = vrento::ShaderType::FRAGMENT;
+    EXPECT_TRUE(SamePipelineCacheKey(key, MakePipelineCacheKey(original)));
+    original.shader_stages[usize()]->spirv = {};
+    EXPECT_FALSE(SamePipelineCacheKey(key, MakePipelineCacheKey(original)));
+    auto empty                             = MakePipelineCacheKey(original);
+    original.shader_stages[usize()]->spirv = vrento::ShaderCode::from(Vec<rstd::uint32_t> {});
+    EXPECT_TRUE(SamePipelineCacheKey(empty, MakePipelineCacheKey(original)));
+}
+
 TEST(PipelineCache, RetentionAndRenderPass) {
     auto                     session = DeviceSession::create({ .validation = true }).unwrap();
     DescriptorLayoutRegistry descriptors;

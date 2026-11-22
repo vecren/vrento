@@ -8,9 +8,18 @@ export namespace vrento
 {
 
 class ShaderCode {
+    static auto HashWords(slice<rstd::uint32_t> words) -> u64 {
+        rstd::hash::DefaultHasher state;
+        rstd::hash::hash_into(words.len().to_primitive(), state);
+        for (auto word : words) rstd::hash::hash_into(word, state);
+        return state.finish();
+    }
+
     struct Storage {
         const Vec<rstd::uint32_t> words;
-        explicit Storage(Vec<rstd::uint32_t> value): words(rstd::move(value)) {}
+        const u64                 content_hash;
+        explicit Storage(Vec<rstd::uint32_t> value)
+            : words(rstd::move(value)), content_hash(HashWords(words.as_slice())) {}
     };
     Option<Arc<Storage>> storage_;
 
@@ -30,6 +39,11 @@ public:
     }
     auto len() const -> usize { return as_slice().len(); }
     auto capacity() const -> usize { return storage_ ? (*storage_)->words.capacity() : usize(); }
+    auto content_hash() const -> u64 {
+        if (storage_) return (*storage_)->content_hash;
+        static const auto empty_hash = HashWords({});
+        return empty_hash;
+    }
     auto is_empty() const -> bool { return len() == usize(); }
     auto data() const -> const rstd::uint32_t* { return as_slice().as_raw_ptr(); }
     auto begin() const -> const rstd::uint32_t* { return data(); }
