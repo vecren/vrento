@@ -803,14 +803,7 @@ public:
     auto PrepareShader(const resource::ShaderPlanEntry& entry, PreparedResourceTable& table,
                        Option<mut_ref<dyn<resource::ShaderArtifactProvider>>> provider)
         -> Result<empty, resource::ResourceError> {
-        if (provider.is_none()) {
-            return Err(resource::ResourceError {
-                .kind = resource::ResourceErrorKind::MissingContent,
-                .message =
-                    rstd::format("shader artifact {} unavailable", entry.request.name.as_str()),
-            });
-        }
-        auto prepared = m_shaders.Prepare(entry.request.clone(), *provider);
+        auto prepared = m_shaders.Prepare(entry.request.clone(), entry.artifact.clone(), provider);
         if (prepared.is_err()) {
             auto error = prepared.unwrap_err();
             error.contexts.push(

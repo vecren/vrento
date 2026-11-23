@@ -10,11 +10,17 @@ export namespace vrento::resource_registry
 {
 
 struct ShaderPhysical {
-    resource::ShaderArtifact artifact;
-    u64                      physical_generation { 1 };
+private:
+    Arc<resource::ShaderArtifact> m_artifact;
 
+public:
+    const resource::ShaderArtifact& artifact;
+    u64                             physical_generation { 1 };
+
+    ShaderPhysical(Arc<resource::ShaderArtifact> value, u64 generation)
+        : m_artifact(rstd::move(value)), artifact(*m_artifact), physical_generation(generation) {}
     ShaderPhysical(resource::ShaderArtifact value, u64 generation)
-        : artifact(rstd::move(value)), physical_generation(generation) {}
+        : ShaderPhysical(Arc<resource::ShaderArtifact>::make(rstd::move(value)), generation) {}
 };
 
 struct ShaderEntry {
@@ -40,6 +46,20 @@ public:
     auto Prepare(resource::ShaderRequest                        request,
                  mut_ref<dyn<resource::ShaderArtifactProvider>> provider)
         -> Result<PreparedShader, resource::ResourceError> {
+        return Prepare(rstd::move(request), None(), Some(provider));
+    }
+
+    auto Prepare(resource::ShaderRequest request, Option<Arc<resource::ShaderArtifact>> artifact,
+                 Option<mut_ref<dyn<resource::ShaderArtifactProvider>>> provider = None())
+        -> Result<PreparedShader, resource::ResourceError> {
+        if (artifact && ((*artifact)->source != request.source ||
+                         (*artifact)->content_version != request.content_version)) {
+            return Err(resource::ResourceError {
+                .kind = resource::ResourceErrorKind::MissingDefinition,
+                .message =
+                    rstd::format("shader artifact {} does not match its request", request.name),
+            });
+        }
         auto existing = m_requests.get(request);
         if (existing.is_some()) {
             auto entry = m_entries.get(**existing);
@@ -55,18 +75,25 @@ public:
             });
         }
 
-        auto artifact = provider->LoadShader(request);
-        if (artifact.is_err()) return Err(rstd::move(artifact).unwrap_err_unchecked());
-        auto handle      = NextHandle();
-        auto request_key = request.clone();
-        auto physical = Arc<ShaderPhysical>::make(rstd::move(artifact).unwrap_unchecked(), u64(1));
+        if (! artifact) {
+            if (! provider)
+                return Err(resource::ResourceError {
+                    .kind    = resource::ResourceErrorKind::MissingContent,
+                    .message = rstd::format("shader artifact {} unavailable", request.name),
+                });
+            auto loaded = (*provider)->LoadShader(request);
+            if (loaded.is_err()) return Err(loaded.unwrap_err());
+            artifact = Some(Arc<resource::ShaderArtifact>::make(loaded.unwrap()));
+        }
+        auto handle = NextHandle();
+        (void)m_requests.insert(request.clone(), handle);
+        auto physical = Arc<ShaderPhysical>::make(artifact.unwrap(), u64(1));
         (void)m_entries.insert(handle,
                                ShaderEntry {
                                    .handle   = handle,
                                    .request  = rstd::move(request),
                                    .physical = physical.clone(),
                                });
-        (void)m_requests.insert(rstd::move(request_key), handle);
         return Ok(PreparedShader {
             .resource = handle,
             .physical = rstd::move(physical),

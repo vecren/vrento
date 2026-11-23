@@ -48,6 +48,7 @@ struct ShaderPlanEntry {
     ShaderUseHandle handle;
     ShaderRequest   request;
     u32             version { 0 };
+    Option<rstd::sync::Arc<ShaderArtifact>> artifact;
 };
 
 struct ReadyToken {
@@ -85,7 +86,8 @@ struct ResourcePlan {
             result.buffers.push(
                 { entry.handle, entry.definition.clone(), entry.access, entry.version });
         for (const auto& entry : shaders)
-            result.shaders.push({ entry.handle, entry.request.clone(), entry.version });
+            result.shaders.push(
+                { entry.handle, entry.request.clone(), entry.version, entry.artifact.clone() });
         return result;
     }
 
