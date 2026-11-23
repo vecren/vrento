@@ -304,7 +304,21 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         auto found = versions.get(u64((Serial(r) << 32) | id.version));
         return found ? Index(**found) : invalid_index;
     };
-    Serial names {}, uses_count {};
+    struct AliasedUse {
+        Index              pass, resource;
+        const ResourceUse* use;
+    };
+    struct StorageGroup {
+        Index      first_version { invalid_index };
+        bool       aliased {};
+        Vec<Index> uses;
+    };
+    HashMap<u64, Index> storage_indexes;
+    Vec<StorageGroup>   storage_groups;
+    Vec<Index>          resource_storage;
+    Vec<Index>          version_resources;
+    Vec<AliasedUse>     alias_uses;
+    Serial              names {}, uses_count {};
     for (Index i {}; i < data.resources.len().to_primitive(); ++i) {
         const auto& r = data.resources[usize(i)];
         if (! r.id.valid() || Index(r.kind) > Index(ResourceKind::Buffer) ||
@@ -314,6 +328,18 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
             return Err(Error { ErrorKind::Invalid, {}, r.id });
         if (resources.insert(u64(r.id.value), Index(i)).is_some())
             return Err(Error { ErrorKind::Duplicate, {}, r.id });
+        Index storage = invalid_index;
+        if (r.storage) {
+            if (auto found = storage_indexes.get(u64(r.storage)); found) {
+                storage                                = **found;
+                storage_groups[usize(storage)].aliased = true;
+            } else {
+                storage = Index(storage_groups.len().to_primitive());
+                (void)storage_indexes.insert(u64(r.storage), Index(storage));
+                storage_groups.push(StorageGroup {});
+            }
+        }
+        resource_storage.push(Index(storage));
         names += r.name.len().to_primitive();
     }
     for (Index i {}; i < data.passes.len().to_primitive(); ++i) {
@@ -330,6 +356,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         const auto& v = data.versions[usize(i)];
         auto        r = resource_index(v.id.resource);
         if (r == invalid_index) return Err(Error { ErrorKind::MissingResource, {}, v.id.resource });
+        version_resources.push(Index(r));
         if (versions.insert(u64((Serial(r) << 32) | v.id.version), Index(i)).is_some())
             return Err(Error { ErrorKind::Duplicate, {}, v.id.resource });
         if (v.writer && pass_index(*v.writer) == invalid_index)
@@ -354,7 +381,8 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         version_uses.push(Vec<Index> {});
     }
     HashSet<u64> use_ids;
-    for (const auto& p : data.passes)
+    for (Index pass {}; pass < data.passes.len().to_primitive(); ++pass) {
+        const auto& p = data.passes[usize(pass)];
         for (const auto& use : p.uses) {
             auto r = resource_index(use.version.resource), v = version_index(use.version);
             if (! use.id || ! use_ids.insert(u64(use.id)))
@@ -365,7 +393,6 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                 return Err(Error { ErrorKind::Invalid, p.id, use.version.resource });
             if (! valid_range(data.resources[usize(r)], use.range))
                 return Err(Error { ErrorKind::Range, p.id, use.version.resource });
-            auto pass = pass_index(p.id);
             bool registered {};
             for (auto existing : version_uses[usize(v)]) registered |= existing == pass;
             if (! registered) version_uses[usize(v)].push(Index(pass));
@@ -375,7 +402,13 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                     return Err(Error { ErrorKind::Conflict, p.id, use.version.resource });
                 writes[usize(v)].push(ResourceRange(use.range));
             }
+            const auto storage = resource_storage[usize(r)];
+            if (storage != invalid_index && storage_groups[usize(storage)].aliased) {
+                storage_groups[usize(storage)].uses.push(Index(alias_uses.len().to_primitive()));
+                alias_uses.push({ pass, r, rstd::addressof(use) });
+            }
         }
+    }
     for (usize i {}; i < data.versions.len(); ++i)
         if (data.versions[i].writer && writes[i].is_empty())
             return Err(Error { ErrorKind::MissingProducer,
@@ -440,16 +473,17 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         return i;
     };
     for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
-        const auto& v = data.versions[usize(i)];
-        const auto& r = data.resources[usize(resource_index(v.id.resource))];
-        if (v.previous && (v.same_storage || r.storage))
+        const auto& v       = data.versions[usize(i)];
+        const auto  storage = resource_storage[usize(version_resources[usize(i)])];
+        if (v.previous && (v.same_storage || storage != invalid_index))
             roots[usize(root(i))] = root(version_index(*v.previous));
-        if (r.storage)
-            for (Index j {}; j < i; ++j) {
-                const auto& other =
-                    data.resources[usize(resource_index(data.versions[usize(j)].id.resource))];
-                if (other.storage == r.storage) roots[usize(root(i))] = root(j);
-            }
+        if (storage != invalid_index) {
+            auto& first = storage_groups[usize(storage)].first_version;
+            if (first == invalid_index)
+                first = i;
+            else
+                roots[usize(root(i))] = root(first);
+        }
         if (v.inherits && v.previous) {
             const auto& previous = data.versions[usize(version_index(*v.previous))];
             if (previous.writer && *previous.writer != *v.writer &&
@@ -565,26 +599,25 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         batches[usize(p)] = Index(plan.batches.len().to_primitive());
         plan.batches.push(rstd::move(batch));
     }
-    for (Index p {}; p < data.passes.len().to_primitive(); ++p)
-        for (const auto& use : data.passes[usize(p)].uses) {
-            const auto& resource = data.resources[usize(resource_index(use.version.resource))];
-            if (! resource.storage) continue;
-            for (Index q {}; q <= p; ++q)
-                for (const auto& other : data.passes[usize(q)].uses) {
-                    if (use.version.resource == other.version.resource ||
-                        (use.access == Access::Read && other.access == Access::Read))
-                        continue;
-                    const auto& other_resource =
-                        data.resources[usize(resource_index(other.version.resource))];
-                    if (other_resource.storage != resource.storage) continue;
-                    if (resource.kind != other_resource.kind ||
-                        (overlaps(resource.kind, use.range, other.range) &&
-                         ! plan.precedes(p, q, reachability) &&
-                         ! plan.precedes(q, p, reachability)))
-                        return Err(Error {
-                            ErrorKind::Conflict, data.passes[usize(p)].id, use.version.resource });
-                }
+    for (const auto& entry : alias_uses) {
+        const auto& use      = *entry.use;
+        const auto& resource = data.resources[usize(entry.resource)];
+        const auto& group    = storage_groups[usize(resource_storage[usize(entry.resource)])];
+        for (const auto index : group.uses) {
+            const auto& other = alias_uses[usize(index)];
+            // Include every use in the same pass, regardless of its declaration order.
+            if (other.pass > entry.pass) break;
+            if (entry.resource == other.resource ||
+                (use.access == Access::Read && other.use->access == Access::Read))
+                continue;
+            if (resource.kind != data.resources[usize(other.resource)].kind ||
+                (overlaps(resource.kind, use.range, other.use->range) &&
+                 ! plan.precedes(entry.pass, other.pass, reachability) &&
+                 ! plan.precedes(other.pass, entry.pass, reachability)))
+                return Err(Error {
+                    ErrorKind::Conflict, data.passes[usize(entry.pass)].id, use.version.resource });
         }
+    }
     for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
         const auto&     node = data.versions[usize(i)];
         const auto&     r    = data.resources[usize(resource_index(node.id.resource))];

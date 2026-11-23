@@ -294,6 +294,53 @@ TEST(FrameGraph, ExplicitAliasesRequireOrder) {
     graph.depends_on(writer, reader).unwrap();
     rstd_assert(rstd::move(graph).finish().is_ok());
 }
+TEST(FrameGraph, StorageGroupsPreserveRangesAndSlots) {
+    FrameGraphBuilder graph(1);
+    auto              declare = [&](Serial id, Serial storage) {
+        auto description    = texture(id);
+        description.layers  = 2;
+        description.storage = storage;
+        return graph.import_resource(rstd::move(description)).unwrap();
+    };
+    auto first = declare(1, 77), second = declare(2, 77), separate = declare(3, 91);
+    auto reader = graph.add_pass({ 1 }, { 1 }).unwrap();
+    auto writer = graph.add_pass({ 2 }, { 2 }).unwrap();
+    graph.read(reader, first, Some(ResourceRange {})).unwrap();
+    auto written   = graph.write(writer, second, Some(ResourceRange { .first_layer = 1 })).unwrap();
+    auto unrelated = graph.write(writer, separate, Some(ResourceRange {})).unwrap();
+
+    auto data = graph.data().clone();
+    rstd::mem::swap(data.versions[usize()], data.versions[usize(3)]);
+    auto result = FrameGraph::create(rstd::move(data));
+    ASSERT_TRUE(result.is_ok());
+    auto compiled = result.unwrap();
+    EXPECT_NE(slot(compiled, first), invalid_index);
+    EXPECT_EQ(slot(compiled, first), slot(compiled, written));
+    EXPECT_NE(slot(compiled, first), slot(compiled, unrelated));
+
+    auto overlap                                             = compiled.clone_data();
+    overlap.passes[usize(1)].uses[usize()].range.first_layer = 0;
+    auto conflict = FrameGraph::create(rstd::move(overlap));
+    ASSERT_TRUE(conflict.is_err());
+    EXPECT_EQ(conflict.unwrap_err().kind, ErrorKind::Conflict);
+}
+TEST(FrameGraph, StorageAliasesCheckTheEntirePass) {
+    FrameGraphBuilder graph(1);
+    auto              first_description  = texture(1);
+    auto              second_description = texture(2);
+    first_description.storage = second_description.storage = 77;
+    auto first  = graph.import_resource(rstd::move(first_description)).unwrap();
+    auto second = graph.import_resource(rstd::move(second_description)).unwrap();
+    auto pass   = graph.add_pass({ 1 }).unwrap();
+    graph.read(pass, first).unwrap();
+    graph.write(pass, second).unwrap();
+
+    auto result = rstd::move(graph).finish();
+    ASSERT_TRUE(result.is_err());
+    auto error = result.unwrap_err();
+    EXPECT_EQ(error.kind, ErrorKind::Conflict);
+    EXPECT_EQ(error.resource.value, first.resource.value);
+}
 TEST(FrameGraph, TextureRangeCoverage) {
     FrameGraphBuilder graph(1);
     auto              description = texture(1);
