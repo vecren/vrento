@@ -714,6 +714,16 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
     };
     auto a = prepare(first), shared = prepare(first), b = prepare(second);
     auto retained        = resources.Prepared().clone();
+    auto physical_key    = [&](const registry::PreparedResourceTable& table) {
+        const auto& texture = **table.Resolve(first);
+        const auto  slot    = texture.PhysicalBinding(usize()).unwrap();
+        const auto  layout  = table.PhysicalBindings().unwrap();
+        return layout.keys()[slot];
+    };
+    const auto original_key = physical_key(retained);
+    EXPECT_EQ(
+        original_key.resource,
+        (*retained.Resolve(first))->ActiveTexture().unwrap().view.texture().identity().resource);
     auto original        = (**retained.Resolve(a)).clone();
     auto original_shared = (**retained.Resolve(shared)).clone();
     auto unrelated       = (**retained.Resolve(b)).clone();
@@ -735,7 +745,10 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
     EXPECT_EQ((*resources.Prepared().Resolve(b))->set->handle, unrelated.set->handle);
     EXPECT_NE(replaced.images[usize()].image.view, original.images[usize()].image.view);
     EXPECT_EQ((*retained.Resolve(a))->set->handle, original.set->handle);
+    EXPECT_NE(physical_key(resources.Prepared()), original_key);
+    EXPECT_EQ(physical_key(retained), original_key);
     EXPECT_TRUE(resources.CancelPreparePlan(transaction));
+    EXPECT_EQ(physical_key(resources.Prepared()), original_key);
     EXPECT_EQ((*resources.Prepared().Resolve(a))->set->handle, original.set->handle);
     EXPECT_EQ(resources.Prepared()
                   .AffectedTextureDescriptors(

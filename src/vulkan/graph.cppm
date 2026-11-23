@@ -3,6 +3,7 @@ export import :vulkan.pass.execution;
 export import :vulkan.texture;
 export import :vulkan.pass.pass;
 import :resource_registry.resource_key;
+import :resource_registry.physical_bindings;
 import rstd;
 
 using namespace rstd::prelude;
@@ -49,111 +50,139 @@ class GraphBindings {
     GraphBindingLayout                              layout_;
     Vec<Option<rstd::sync::Arc<dyn<GraphBinding>>>> entries_;
 
-    struct SlotCounts {
-        usize               total {};
-        HashMap<u32, usize> slots;
-        void                add(fg::Index slot) {
-            ++total;
-            if (slot == fg::invalid_index) return;
-            if (auto count = slots.get_mut(u32(slot)))
-                ++**count;
-            else
-                slots.insert(u32(slot), usize(1));
-        }
-        auto matches(fg::Index slot) const -> usize {
-            if (slot != fg::invalid_index)
-                if (auto count = slots.get(u32(slot))) return **count;
-            return usize();
-        }
-    };
-    struct AliasCounts {
-        SlotCounts all, restricted;
-        void       add(fg::Index slot, bool shared) {
-            all.add(slot);
-            if (! shared) restricted.add(slot);
-        }
-    };
-    struct AliasGroup {
-        AliasCounts                     counts;
-        HashMap<fg::Index, AliasCounts> resources;
-        void                            add(fg::Index resource, fg::Index slot, bool shared) {
-            counts.add(slot, shared);
-            if (! resources.contains_key(resource)) resources.insert(resource, AliasCounts {});
-            resources.get_mut(resource).unwrap()->add(slot, shared);
-        }
-    };
-    auto check_aliases(slice<GraphBindingRequirement> resources,
-                       slice<GraphBindingInfo> infos) const -> Result<empty, GraphExecutionError> {
-        const auto                                   versions = layout_.versions();
-        HashMap<graph_texture::Identity, fg::Index>  owners[2];
-        HashMap<graph_texture::Identity, AliasGroup> aliases[2];
-        struct VersionGroup {
-            HashMap<u32, graph_texture::Identity>       slots;
-            HashMap<graph_texture::Identity, fg::Index> identities;
+    Option<resource_registry::PhysicalBindingLayout> physical_layout_;
+    Vec<Option<usize>>                               physical_slots_;
+    Option<resource_registry::PhysicalBindingKey>    unique_physical_;
+
+    friend class TextureOutput;
+    auto add_unique_physical(resource_registry::PhysicalBindingKey key) -> Option<usize> {
+        if (! physical_layout_ || unique_physical_) return None();
+        unique_physical_ = Some(resource_registry::PhysicalBindingKey(key));
+        return Some(physical_layout_->keys().len());
+    }
+
+    static auto physical_key(const GraphBindingInfo& info)
+        -> resource_registry::PhysicalBindingKey {
+        return { info.kind == GraphResourceKind::Buffer, info.identity.resource };
+    }
+    auto classify_physical(slice<GraphBindingRequirement> resources,
+                           slice<GraphBindingInfo>        infos) const
+        -> Result<Vec<bool>, GraphExecutionError> {
+        const auto versions = layout_.versions();
+        Vec<bool>  written;
+        written.resize(versions.len(), false);
+        constexpr auto end   = fg::invalid_index;
+        auto           error = [&](usize i) {
+            const auto& version = versions[i];
+            return Err(GraphExecutionError {
+                GraphExecutionStage::Binding, version.first_pass, version.version.resource });
         };
-        HashMap<fg::Index, VersionGroup> groups;
-        auto                             check_version = [&](VersionGroup& group, usize i) {
-            const auto allocation        = versions[i].allocation;
-            const auto identity          = infos[i].identity;
-            auto       previous_identity = group.slots.get(u32(allocation));
-            auto       previous_slot     = group.identities.get(identity);
-            if ((previous_identity && **previous_identity != identity) ||
-                (previous_slot && **previous_slot != allocation))
-                return false;
-            group.slots.insert(u32(allocation), identity);
-            group.identities.insert(identity, allocation);
-            return true;
+        if (! resources.is_empty())
+            for (usize i {}; i < versions.len(); ++i) {
+                auto previous = versions[i].same_allocation;
+                if (previous != end && infos[usize(previous)].identity != infos[i].identity)
+                    return error(i);
+            }
+
+        struct Seen {
+            fg::Index group { fg::invalid_index };
+            fg::Index allocation { fg::invalid_index };
         };
-        for (usize i {}; i < versions.len(); ++i) {
-            const auto& version = versions[i];
-            if (! version.used) continue;
-            const auto& info = infos[i];
-            const auto  kind  = info.kind == GraphResourceKind::Buffer ? 1 : 0;
-            auto        owner = owners[kind].get(info.identity);
-            if (! owner)
-                owners[kind].insert(info.identity, version.resource);
-            else if (**owner != version.resource && ! aliases[kind].contains_key(info.identity))
-                aliases[kind].insert(info.identity, AliasGroup {});
-            if (version.first_slotted == fg::invalid_index) continue;
-            auto group = groups.get_mut(version.resource);
-            if (! group) {
-                groups.insert(version.resource, VersionGroup {});
-                group = groups.get_mut(version.resource);
-                (void)check_version(**group, usize(version.first_slotted));
+        Vec<Seen> seen;
+        if (! resources.is_empty()) {
+            seen.reserve(resources.len());
+            for (usize i {}; i < resources.len(); ++i) seen.push(Seen {});
+        }
+        auto check_group = [&](slice<fg::Index> members) -> Result<empty, GraphExecutionError> {
+            auto first  = members[usize()];
+            bool writes = versions[usize(first)].written;
+            if (members.len() == usize(1)) {
+                written[usize(first)] = writes;
+                return Ok(empty {});
             }
-            if (! check_version(**group, i))
-                return Err(GraphExecutionError {
-                    GraphExecutionStage::Binding, version.first_pass, version.version.resource });
-        }
-        if (aliases[0].is_empty() && aliases[1].is_empty()) return Ok(empty {});
-        for (usize i {}; i < versions.len(); ++i) {
-            const auto& version = versions[i];
-            if (! version.used) continue;
-            const auto& info  = infos[i];
-            auto&       table = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-            if (auto alias = table.get_mut(info.identity))
-                (*alias)->add(version.resource,
-                              version.allocation,
-                              resources[usize(version.resource)].read_only_import);
-        }
-        for (usize i {}; i < versions.len(); ++i) {
-            const auto& version = versions[i];
-            if (! version.used) continue;
-            const auto& info  = infos[i];
-            const auto& table = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-            if (auto alias = table.get(info.identity)) {
-                const auto& own    = *(*alias)->resources.get(version.resource).unwrap();
-                const bool  shared = resources[usize(version.resource)].read_only_import;
-                const auto& all    = shared ? (*alias)->counts.restricted : (*alias)->counts.all;
-                const auto& local  = shared ? own.restricted : own.all;
-                if (all.total - local.total !=
-                    all.matches(version.allocation) - local.matches(version.allocation))
-                    return Err(GraphExecutionError { GraphExecutionStage::Binding,
-                                                     version.first_pass,
-                                                     version.version.resource });
+            bool        all_read_only  = true;
+            bool        same_slot      = true;
+            bool        cross_resource = false;
+            usize       conflict(first);
+            const auto& base = versions[usize(first)];
+            for (auto member : members) {
+                const auto& version = versions[usize(member)];
+                writes |= version.written;
+                if (resources.is_empty()) continue;
+                cross_resource |= version.resource != base.resource;
+                all_read_only &= resources[usize(version.resource)].read_only_import;
+                if (version.allocation != base.allocation) {
+                    same_slot = false;
+                    conflict  = usize(member);
+                }
+                if (version.allocation == end) continue;
+                auto& previous = seen[usize(version.resource)];
+                if (previous.group == first && previous.allocation != version.allocation)
+                    return error(usize(member));
+                previous = { first, version.allocation };
+            }
+            // Within one logical resource, read-only import status is constant.
+            if (cross_resource && ! all_read_only && (! same_slot || base.allocation == end))
+                return error(conflict);
+            for (auto member : members) written[usize(member)] = writes;
+            return Ok(empty {});
+        };
+
+        if (physical_layout_) {
+            auto           keys = physical_layout_->keys();
+            Vec<fg::Index> heads, next;
+            heads.resize(keys.len() + usize(bool(unique_physical_)), end);
+            next.resize(versions.len(), end);
+            bool indexed = true;
+            for (usize i {}; i < versions.len(); ++i) {
+                if (! versions[i].used) continue;
+                auto index = physical_slots_[i];
+                if (! index || *index >= heads.len() ||
+                    physical_key(infos[i]) !=
+                        (*index < keys.len() ? keys[*index] : *unique_physical_)) {
+                    indexed = false;
+                    break;
+                }
+                next[i]       = heads[*index];
+                heads[*index] = fg::Index(i.to_primitive());
+            }
+            if (indexed) {
+                Vec<fg::Index> members;
+                for (auto head : heads) {
+                    if (head == end) continue;
+                    if (next[usize(head)] == end) {
+                        written[usize(head)] = versions[usize(head)].written;
+                        continue;
+                    }
+                    members.clear();
+                    for (auto i = head; i != end; i = next[usize(i)]) members.push(fg::Index(i));
+                    auto checked = check_group(members.as_slice());
+                    if (checked.is_err()) return Err(checked.unwrap_err());
+                }
+                return Ok(rstd::move(written));
             }
         }
-        return Ok(empty {});
+
+        Vec<fg::Index> order;
+        order.reserve(versions.len());
+        for (usize i {}; i < versions.len(); ++i)
+            if (versions[i].used) order.push(fg::Index(i.to_primitive()));
+        rstd::slice_::sort_unstable_by(
+            order.as_mut_slice().as_mut_ref(), [&](fg::Index a, fg::Index b) {
+                auto left = physical_key(infos[usize(a)]), right = physical_key(infos[usize(b)]);
+                return left.buffer == right.buffer ? left.resource < right.resource
+                                                   : left.buffer < right.buffer;
+            });
+        for (usize first {}; first < order.len();) {
+            auto key  = physical_key(infos[usize(order[first])]);
+            auto last = first + usize(1);
+            while (last < order.len() && physical_key(infos[usize(order[last])]) == key) ++last;
+            auto checked =
+                check_group(slice<fg::Index>::from_raw_parts(&order[first], last - first));
+            if (checked.is_err()) return Err(checked.unwrap_err());
+            first = last;
+        }
+        return Ok(rstd::move(written));
     }
 
 public:
@@ -163,8 +192,16 @@ public:
     }
     bool matches(const GraphBindingLayout& layout) const { return layout_.same_layout(layout); }
     auto scope() const -> GraphSerial { return layout_.scope(); }
-    auto bind(GraphBindingSlot slot, rstd::sync::Arc<dyn<GraphBinding>> binding)
-        -> Result<empty, GraphExecutionError> {
+    void use_physical_layout(Option<resource_registry::PhysicalBindingLayout> layout) {
+        physical_layout_ = rstd::move(layout);
+        unique_physical_ = None();
+        physical_slots_.clear();
+        if (! physical_layout_) return;
+        physical_slots_.reserve(entries_.len());
+        for (usize i {}; i < entries_.len(); ++i) physical_slots_.push(None());
+    }
+    auto bind(GraphBindingSlot slot, rstd::sync::Arc<dyn<GraphBinding>> binding,
+              Option<usize> physical = None()) -> Result<empty, GraphExecutionError> {
         if (usize(slot.index) >= entries_.len())
             return Err(GraphExecutionError { GraphExecutionStage::Binding });
         auto& entry = entries_[usize(slot.index)];
@@ -174,6 +211,7 @@ public:
                 GraphExecutionStage::Binding, version.first_pass, version.version.resource });
         }
         entry = Some(rstd::move(binding));
+        if (physical_layout_) physical_slots_[usize(slot.index)] = physical;
         return Ok(empty {});
     }
     auto resolve(GraphBindingSlot slot) const [[clang::lifetimebound]]
@@ -195,7 +233,6 @@ public:
         auto                  versions = layout_.versions();
         Vec<GraphBindingInfo> infos;
         infos.reserve(versions.len());
-        HashSet<graph_texture::Identity> written;
         for (usize i {}; i < versions.len(); ++i) {
             const auto& version = versions[i];
             auto&       entry   = entries[i];
@@ -224,20 +261,17 @@ public:
                     return Err(GraphExecutionError {
                         GraphExecutionStage::Binding, version.first_pass, id });
             }
-            if (version.written) written.insert(info.identity);
             infos.push(rstd::move(info));
         }
-        if (! resources.is_empty()) {
-            auto aliases = check_aliases(resources, infos.as_slice());
-            if (aliases.is_err()) return Err(aliases.unwrap_err());
-        }
+        auto written = classify_physical(resources, infos.as_slice());
+        if (written.is_err()) return Err(written.unwrap_err());
         for (usize i {}; i < entries.len(); ++i) {
             auto& entry = entries[i];
             if (! entry) continue;
             const auto& version = versions[i];
             bool        read_only =
                 (resources.is_empty() || resources[usize(version.resource)].imported) &&
-                ! written.contains(infos[i].identity);
+                ! (*written)[i];
             if (read_only && work) {
                 if (auto view = (*entry)->Texture()) {
                     auto recorded = texture_recorded_in(*work, session, *view);
@@ -259,6 +293,9 @@ public:
             }
             entry = Some(frozen.unwrap());
         }
+        physical_layout_ = None();
+        physical_slots_  = {};
+        unique_physical_ = None();
         entries_ = rstd::move(entries);
         return Ok(rstd::move(*this));
     }

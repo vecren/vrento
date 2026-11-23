@@ -11,6 +11,7 @@ import :resource_registry.shader_registry;
 import :resource_registry.descriptor;
 import :resource_registry.graphics;
 import :resource_registry.external;
+import :resource_registry.physical_bindings;
 
 using rstd::collections::HashMap;
 using rstd::sync::Arc;
@@ -29,11 +30,17 @@ struct PreparedTexture {
     vulkan::ImageSlotsRef    image;
     u64                      physical_generation { 0 };
     texture::SubmissionToken completion;
-    auto                     ActiveTexture() const -> Result<TextureSlot, texture::Error> {
+    Vec<usize>               physical_bindings;
+    auto                     PhysicalBinding(usize slot) const -> Option<usize> {
+        return slot < physical_bindings.len() ? Some(usize(physical_bindings[slot])) : None();
+    }
+    auto TextureAt(usize slot) const -> Result<TextureSlot, texture::Error> {
         auto slots = physical->Slots();
-        auto slot  = image.active_slot();
         if (slot >= slots.len()) return Err(texture::Error { texture::ErrorKind::Invalid });
         return Ok(TextureSlot(slots[slot]));
+    }
+    auto ActiveTexture() const -> Result<TextureSlot, texture::Error> {
+        return TextureAt(image.active_slot());
     }
 };
 
@@ -46,6 +53,7 @@ struct PreparedTextureLease {
 struct PreparedBufferUse {
     resource::BufferUseHandle use;
     PreparedBuffer            buffer;
+    Option<usize>             physical_binding;
 };
 
 struct PreparedShaderUse {
@@ -128,7 +136,41 @@ class PreparedResourceTable {
 public:
     explicit PreparedResourceTable(u64 generation = u64()): m_generation(generation) {}
 
+    void IndexPhysicalBindings() {
+        Vec<PhysicalBindingKey> keys;
+        HashMap<u64, usize>     indices[2];
+        auto                    index = [&](PhysicalBindingKey key) {
+            auto& table = indices[key.buffer ? 1 : 0];
+            if (auto known = table.get(u64(key.resource))) return usize(**known);
+            auto slot = keys.len();
+            (void)table.insert(u64(key.resource), slot);
+            keys.push(PhysicalBindingKey(key));
+            return slot;
+        };
+        auto textures = m_textures.values_mut();
+        for (auto item = textures.next(); item; item = textures.next()) {
+            auto&      texture = **item;
+            const auto slots   = texture.physical->Slots();
+            texture.physical_bindings.clear();
+            texture.physical_bindings.reserve(slots.len());
+            for (const auto& slot : slots)
+                texture.physical_bindings.push(
+                    index({ false, slot.view.texture().identity().resource }));
+        }
+        auto buffers = m_buffers.values_mut();
+        for (auto item = buffers.next(); item; item = buffers.next())
+            (**item).physical_binding =
+                Some(index({ true, (**item).buffer.physical->buffer.identity() }));
+        m_physical_bindings =
+            Some(PhysicalBindingLayout(Arc<Vec<PhysicalBindingKey>>::make(rstd::move(keys))));
+    }
+
+    auto PhysicalBindings() const -> Option<PhysicalBindingLayout> {
+        return m_physical_bindings ? Some(m_physical_bindings->clone()) : None();
+    }
+
     bool Insert(PreparedTexture texture) {
+        m_physical_bindings = None();
         return m_textures.insert(texture.use, rstd::move(texture)).is_none();
     }
 
@@ -228,6 +270,7 @@ public:
         return result;
     }
     bool Insert(PreparedBufferUse buffer) {
+        m_physical_bindings = None();
         return m_buffers.insert(buffer.use, rstd::move(buffer)).is_none();
     }
 
@@ -406,6 +449,7 @@ public:
 
     void CarryForward(PreparedResourceTable&&        previous,
                       resource::ResourcePlanSections prepared_sections) {
+        m_physical_bindings = None();
         if (! resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanTextures)) {
             m_textures = rstd::move(previous.m_textures);
         }
@@ -438,6 +482,7 @@ public:
                 .image               = texture.image,
                 .physical_generation = texture.physical_generation,
                 .completion          = texture.completion,
+                .physical_bindings   = texture.physical_bindings.clone(),
             });
         }
 
@@ -445,8 +490,9 @@ public:
         for (auto value = buffers.next(); value.is_some(); value = buffers.next()) {
             const auto& buffer = **value;
             (void)cloned.Insert(PreparedBufferUse {
-                .use    = buffer.use,
-                .buffer = buffer.buffer.clone(),
+                .use              = buffer.use,
+                .buffer           = buffer.buffer.clone(),
+                .physical_binding = buffer.physical_binding,
             });
         }
 
@@ -507,6 +553,7 @@ public:
                 .frame = external.frame.clone(),
             });
         }
+        cloned.m_physical_bindings = PhysicalBindings();
         return cloned;
     }
 
@@ -540,6 +587,7 @@ private:
     using ExternalMap    = HashMap<resource::ExternalUseHandle, PreparedExternalUse>;
 
     u64                                                                       m_generation { 0 };
+    Option<PhysicalBindingLayout>                                             m_physical_bindings;
     TextureMap                                                                m_textures;
     BufferMap                                                                 m_buffers;
     ShaderMap                                                                 m_shaders;

@@ -223,11 +223,17 @@ public:
                 SurfaceScopeBackend(logical_surface, lease, target.owner(), rstd::move(scopes)))
         };
         auto source = resources.Prepared().Resolve(*source_);
+        request.bindings.use_physical_layout(resources.Prepared().PhysicalBindings());
         if (! source) return invalid();
-        auto selected = (*source)->ActiveTexture();
+        auto image_slot = (*source)->image.active_slot();
+        auto selected   = (*source)->TextureAt(image_slot);
         if (selected.is_err()) return invalid();
         auto surface_binding = Arc<dyn<GraphBinding>>::make(
             SurfaceGraphBinding(target.session(), lease, target.owner()));
+        // SurfaceGraphBinding creates a new texture identity for this lease.
+        auto surface_physical = request.bindings.add_unique_physical(
+            { false, surface_binding->Info().identity.resource });
+        auto source_physical = (*source)->PhysicalBinding(image_slot);
         auto source_binding = Arc<dyn<GraphBinding>>::make(GraphTextureBinding(selected->view));
         const PassId output_passes[] { output, release };
         for (auto id : output_passes) {
@@ -237,10 +243,11 @@ public:
             auto        slot = compiled.description().frame_graph().pass_slot(id);
             for (const auto& use : compiled.description().passes()[usize(slot)].uses) {
                 if (request.bindings.resolve(use.binding)) continue;
-                auto bound =
-                    request.bindings.bind(use.binding,
-                                          use.resource == logical_surface ? surface_binding.clone()
-                                                                          : source_binding.clone());
+                bool surface = use.resource == logical_surface;
+                auto bound   = request.bindings.bind(use.binding,
+                                                     surface ? surface_binding.clone()
+                                                             : source_binding.clone(),
+                                                     surface ? surface_physical : source_physical);
                 if (bound.is_err()) return Err(bound.unwrap_err());
             }
             if (desc.execution().id == output && graphics()) {

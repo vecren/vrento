@@ -444,6 +444,7 @@ public:
                                   ? next.ChangedTextureBindings(m_prepared)
                                   : Vec<resource::TextureUseHandle>();
         next.CarryForward(rstd::move(m_prepared), sections);
+        next.IndexPhysicalBindings();
         m_prepared             = rstd::move(next);
         m_prepare_rollback     = Some(PrepareRollback {
             .table = rstd::move(previous),

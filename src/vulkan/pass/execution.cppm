@@ -313,7 +313,7 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
 struct GraphBindingVersion {
     fg::ResourceVersion version;
     fg::Index           resource { fg::invalid_index }, allocation { fg::invalid_index };
-    fg::Index           first_slotted { fg::invalid_index };
+    fg::Index           same_allocation { fg::invalid_index };
     PassId              first_pass;
     bool                used {}, written {};
 };
@@ -336,24 +336,25 @@ public:
     static auto from_graph(const fg::FrameGraph& graph) -> GraphBindingLayout {
         const auto&    plan = graph.inspect();
         Data           data { .scope = graph.scope() };
-        Vec<fg::Index> first_slots;
-        first_slots.resize(graph.resources().len(), fg::invalid_index);
+        HashMap<fg::ResourceVersion, fg::Index> first_slots;
         data.versions.reserve(graph.versions().len());
         for (usize i {}; i < graph.versions().len(); ++i) {
             auto      version       = graph.versions()[i].id;
             auto      first         = plan.lifetimes[i].uses.first();
             auto      resource      = graph.resource_slot(version.resource);
             auto      allocation    = plan.allocations[i].slot;
-            fg::Index first_slotted = fg::invalid_index;
+            fg::Index same_allocation = fg::invalid_index;
             if (allocation != fg::invalid_index && plan.accesses[i].used()) {
-                auto& slot    = first_slots[usize(resource)];
-                first_slotted = slot;
-                if (slot == fg::invalid_index) slot = fg::Index(i.to_primitive());
+                fg::ResourceVersion key { version.resource, allocation };
+                if (auto first = first_slots.get(key))
+                    same_allocation = **first;
+                else
+                    (void)first_slots.insert(key, fg::Index(i.to_primitive()));
             }
             data.versions.push({ version,
                                  resource,
                                  allocation,
-                                 first_slotted,
+                                 same_allocation,
                                  first ? graph.passes()[usize(**first)].id : PassId {},
                                  plan.accesses[i].used(),
                                  plan.accesses[i].written });

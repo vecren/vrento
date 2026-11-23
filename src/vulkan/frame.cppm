@@ -9,6 +9,7 @@ struct GraphFrameRequest {
     struct Buffer {
         GraphBindingSlot    slot;
         BufferAllocation    allocation;
+        Option<usize>       physical;
     };
     GraphBindings                  bindings;
     Vec<PassFrameBinding>          parameters;
@@ -96,7 +97,7 @@ public:
                                                          .version.resource });
                 continue;
             }
-            auto bound = request.bindings.bind(buffer.slot, rstd::move(binding));
+            auto bound = request.bindings.bind(buffer.slot, rstd::move(binding), buffer.physical);
             if (bound.is_err()) return Err(bound.unwrap_err());
         }
         auto started = graph.prepare_frame(rstd::move(request.bindings),

@@ -1422,15 +1422,45 @@ TEST(GraphVulkan, SharedImportedTexturesRequireReadOnlyGraphUses) {
     desc.extent = { 4, 4 };
     desc.usage  = vrento::texture::Usage::Sampled | vrento::texture::Usage::TransferDestination;
     auto view   = context.CreateView(context.CreateTexture(desc).unwrap(), {}).unwrap();
-    auto               setup  = context.Begin().unwrap();
-    tex::TextureUpload upload;
-    upload.target = view;
-    upload.width = upload.height = 4;
-    Vec<u8> bytes;
-    bytes.resize(usize(64), u8());
-    upload.bytes = rstd::move(bytes);
-    setup.commands()->Upload(rstd::move(upload)).unwrap();
+    auto other  = context.CreateView(context.CreateTexture(desc).unwrap(), {}).unwrap();
+    auto setup  = context.Begin().unwrap();
+    for (const auto& target : { view, other }) {
+        tex::TextureUpload upload;
+        upload.target = target;
+        upload.width = upload.height = 4;
+        Vec<u8> bytes;
+        bytes.resize(usize(64), u8());
+        upload.bytes = rstd::move(bytes);
+        setup.commands()->Upload(rstd::move(upload)).unwrap();
+    }
     context.wait(context.Submit(rstd::move(setup)).unwrap()).unwrap();
+    namespace registry = vrento::resource_registry;
+    Vec<registry::TextureSlot> candidates;
+    candidates.push({ .view = view });
+    candidates.push({ .view = other });
+    auto allocation = rstd::sync::Arc<registry::TextureAllocation>::make(
+        rstd::move(candidates), vrento::vulkan::ImageSlotsRef {});
+    registry::PreparedResourceTable          prepared;
+    const vrento::resource::TextureUseHandle first { u64(1), u64(1) };
+    const vrento::resource::TextureUseHandle second { u64(2), u64(1) };
+    ASSERT_TRUE(prepared.Insert({ .use = first, .physical = allocation.clone() }));
+    ASSERT_TRUE(prepared.Insert({ .use = second, .physical = rstd::move(allocation) }));
+    prepared.IndexPhysicalBindings();
+    ASSERT_EQ(prepared.PhysicalBindings()->keys().len(), usize(2));
+    const auto& prepared_first  = **prepared.Resolve(first);
+    const auto& prepared_second = **prepared.Resolve(second);
+    const auto  first_slot      = prepared_first.PhysicalBinding(usize()).unwrap();
+    const auto  other_slot      = prepared_first.PhysicalBinding(usize(1)).unwrap();
+    EXPECT_EQ(prepared_second.PhysicalBinding(usize()).unwrap(), first_slot);
+    EXPECT_NE(first_slot, other_slot);
+
+    enum class BindingPath
+    {
+        Prepared,
+        AlternateCandidate,
+        Unindexed,
+        StaleIndex
+    };
     for (bool writes : array<bool, 2> { false, true }) {
         vrento::fg::FrameGraphBuilder builder(711);
         auto                          a  = builder.import_resource({ .id = { 1, 1 } }).unwrap();
@@ -1451,15 +1481,34 @@ TEST(GraphVulkan, SharedImportedTexturesRequireReadOnlyGraphUses) {
         auto graph = vrento::vulkan::VulkanPassSet::associate(rstd::move(builder).finish().unwrap(),
                                                               rstd::move(passes))
                          .unwrap();
-        vrento_test::BindingSources bindings;
-        for (auto version : array<vrento::fg::ResourceVersion, 2> { a, b })
-            bindings.add_version(version,
-                                 rstd::sync::Arc<dyn<vrento::vulkan::GraphBinding>>::make(
-                                     vrento::vulkan::GraphTextureBinding(view)));
-        EXPECT_EQ(bindings.for_layout(graph.binding_layout())
-                      .freeze(session, graph.resources(), nullptr)
-                      .is_ok(),
-                  ! writes);
+        for (auto path : { BindingPath::Prepared,
+                           BindingPath::AlternateCandidate,
+                           BindingPath::Unindexed,
+                           BindingPath::StaleIndex }) {
+            const auto&                   layout = graph.binding_layout();
+            vrento::vulkan::GraphBindings bindings(layout);
+            if (path != BindingPath::Unindexed)
+                bindings.use_physical_layout(prepared.PhysicalBindings());
+            for (usize i {}; i < layout.versions().len(); ++i) {
+                const auto& version = layout.versions()[i];
+                if (! version.used) continue;
+                const bool alternate =
+                    version.version == b && path == BindingPath::AlternateCandidate;
+                Option<usize> slot = None();
+                if (path != BindingPath::Unindexed) {
+                    const bool stale = version.version == b && path == BindingPath::StaleIndex;
+                    slot             = Some(usize(alternate || stale ? other_slot : first_slot));
+                }
+                bindings
+                    .bind({ vrento::fg::Index(i.to_primitive()) },
+                          rstd::sync::Arc<dyn<vrento::vulkan::GraphBinding>>::make(
+                              vrento::vulkan::GraphTextureBinding(alternate ? other : view)),
+                          slot)
+                    .unwrap();
+            }
+            EXPECT_EQ(rstd::move(bindings).freeze(session, graph.resources(), nullptr).is_ok(),
+                      ! writes || path == BindingPath::AlternateCandidate);
+        }
     }
     EXPECT_EQ(session.validation_errors(), 0u);
 }
@@ -1481,9 +1530,10 @@ struct Binding {
     rstd::sync::Arc<Counts>              counts;
     tex::Identity                        identity;
     Option<rstd::sync::Arc<FrozenLease>> lease;
+    vk::GraphResourceKind                kind { vk::GraphResourceKind::Buffer };
     auto                                 Info() const -> vk::GraphBindingInfo {
         ++counts->info;
-        return { vk::GraphResourceKind::Buffer, identity, 64 };
+        return { kind, identity, 64 };
     }
     auto Freeze(bool read_only) const
         -> Result<rstd::sync::Arc<dyn<vk::GraphBinding>>, vk::GraphExecutionError>;
@@ -1517,12 +1567,17 @@ auto Binding::Freeze(bool read_only) const
     ++counts->frozen;
     if (read_only) ++counts->read_only;
     if (counts->fail) return Err(vk::GraphExecutionError { vk::GraphExecutionStage::Prepare });
-    return Ok(rstd::sync::Arc<dyn<vk::GraphBinding>>::make(Binding {
-        counts.clone(), identity, Some(rstd::sync::Arc<FrozenLease>::make(counts.clone())) }));
+    return Ok(rstd::sync::Arc<dyn<vk::GraphBinding>>::make(
+        Binding { counts.clone(),
+                  identity,
+                  Some(rstd::sync::Arc<FrozenLease>::make(counts.clone())),
+                  kind }));
 }
-auto binding(const rstd::sync::Arc<Counts>& counts, tex::Identity identity)
+auto binding(const rstd::sync::Arc<Counts>& counts, tex::Identity identity,
+             vk::GraphResourceKind kind = vk::GraphResourceKind::Buffer)
     -> rstd::sync::Arc<dyn<vk::GraphBinding>> {
-    return rstd::sync::Arc<dyn<vk::GraphBinding>>::make(Binding { counts.clone(), identity });
+    return rstd::sync::Arc<dyn<vk::GraphBinding>>::make(
+        Binding { .counts = counts.clone(), .identity = identity, .kind = kind });
 }
 TEST(GraphBindings, SlotsFollowVersionOrderAndRejectDuplicateBindings) {
     vk::PassExecutionInfo pass { .id = { 1 }, .kind = 9 };
@@ -1647,7 +1702,6 @@ TEST(GraphBindings, FreezePassPropagatesWritesAcrossPhysicalAliases) {
     auto                  session = vk::DeviceSession::create({ .validation = true }).unwrap();
     auto                  queue   = vk::TextureContext::create(session).unwrap();
     auto                  work    = queue.Begin().unwrap();
-    auto                  counts  = rstd::sync::Arc<Counts>::make();
     vk::PassExecutionInfo pass { .id = { 1 }, .kind = 9 };
     pass.uses.push({ { 1, 1 },
                      0,
@@ -1661,16 +1715,24 @@ TEST(GraphBindings, FreezePassPropagatesWritesAcrossPhysicalAliases) {
                      vk::PassUsage::Storage,
                      vk::PassStages::Compute,
                      { .size = 64 } });
-    auto              layout = vk::GraphBindingLayout::for_pass(9, pass);
-    vk::GraphBindings bindings(layout);
-    for (auto use : pass.uses)
-        bindings.bind(use.binding, binding(counts, { session.epoch(), session.epoch(), 1 }))
-            .unwrap();
-    auto frozen = rstd::move(bindings).freeze(session, {}, &work).unwrap();
-    EXPECT_EQ(counts->info, 2u);
-    EXPECT_EQ(counts->frozen, 2u);
-    EXPECT_EQ(counts->read_only, 0u);
-    EXPECT_FALSE(frozen.resolve({ 2 }));
+    auto layout = vk::GraphBindingLayout::for_pass(9, pass);
+    for (bool same_kind : { true, false }) {
+        auto              counts = rstd::sync::Arc<Counts>::make();
+        vk::GraphBindings bindings(layout);
+        for (auto use : pass.uses) {
+            auto kind = same_kind || use.access == vk::GraphAccess::Write
+                            ? vk::GraphResourceKind::Buffer
+                            : vk::GraphResourceKind::Texture;
+            bindings
+                .bind(use.binding, binding(counts, { session.epoch(), session.epoch(), 1 }, kind))
+                .unwrap();
+        }
+        auto frozen = rstd::move(bindings).freeze(session, {}, &work).unwrap();
+        EXPECT_EQ(counts->info, 2u);
+        EXPECT_EQ(counts->frozen, 2u);
+        EXPECT_EQ(counts->read_only, same_kind ? 0u : 1u);
+        EXPECT_FALSE(frozen.resolve({ 2 }));
+    }
     work.discard();
 }
 TEST(GraphBindings, IndexedAliasValidationMatchesPairwiseRules) {

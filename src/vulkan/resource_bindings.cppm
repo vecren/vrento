@@ -9,6 +9,7 @@ export namespace vrento::vulkan
 struct TextureSelection {
     resource::TextureUseHandle use;
     texture::TextureViewRef    view;
+    usize                      image_slot {};
 };
 
 inline auto capture_resources(const pass::GraphResourceMap&                   mapping,
@@ -40,7 +41,8 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
         if ((**value).definition.id() != binding.definition.id())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        auto selected = (**value).ActiveTexture();
+        auto image_slot = (**value).image.active_slot();
+        auto selected   = (**value).TextureAt(image_slot);
         if (selected.is_err())
             return Err(GraphExecutionError {
                 GraphExecutionStage::Binding,
@@ -48,7 +50,10 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
                 version.resource,
                 vrento::vulkan::GraphExecutionCause::Texture(selected.unwrap_err()) });
         auto view = selected->view;
-        if (auto index = chosen.get(binding.resource.handle)) view = selections[**index].view;
+        if (auto index = chosen.get(binding.resource.handle)) {
+            view       = selections[**index].view;
+            image_slot = selections[**index].image_slot;
+        }
         if (! view.valid())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
         const auto& range    = view.description().range;
@@ -68,8 +73,9 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
                     GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
             continue;
         }
-        auto bound =
-            frame.bindings.bind(slot, Arc<dyn<GraphBinding>>::make(GraphTextureBinding(view)));
+        auto bound = frame.bindings.bind(slot,
+                                         Arc<dyn<GraphBinding>>::make(GraphTextureBinding(view)),
+                                         (**value).PhysicalBinding(image_slot));
         if (bound.is_err()) return Err(bound.unwrap_err());
     }
     for (const auto& binding : mapping.buffers) {
@@ -83,7 +89,8 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
         if (binding.range.offset > allocation.size() ||
             binding.range.size > allocation.size() - binding.range.offset)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        frame.buffers.push({ { binding.version_index }, allocation.clone() });
+        frame.buffers.push(
+            { { binding.version_index }, allocation.clone(), (**value).physical_binding });
     }
     return Ok(empty {});
 }
