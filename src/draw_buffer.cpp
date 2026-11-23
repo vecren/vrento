@@ -101,7 +101,7 @@ auto RenderBufferResolver::tryPrepareDrawBuffers(const DrawBufferRequest& reques
                                                             request.buffer_uses });
 }
 
-auto RenderBufferResolver::tryPrepareDrawBuffers(const DrawBufferPrepareRequest& request)
+auto BuildDrawBufferRefs(const DrawBufferPrepareRequest& request)
     -> Result<DrawBufferRefs, resource::ResourceError> {
     auto count = DrawCount(request.geometry);
     if (count.is_none())
@@ -114,12 +114,6 @@ auto RenderBufferResolver::tryPrepareDrawBuffers(const DrawBufferPrepareRequest&
                                              rstd::format("draw buffer use count {} expected {}",
                                                           request.buffer_uses.len(),
                                                           required) });
-    for (auto use : request.buffer_uses)
-        if (m_resources.Resolve(use).is_none())
-            return Err(resource::ResourceError {
-                resource::ResourceErrorKind::MissingContent,
-                rstd::format("draw buffer use {}:{} unavailable", use.index, use.generation) });
-
     DrawBufferRefs out;
     out.render_item = request.render_item;
     out.dynamic     = request.geometry.dynamic;
@@ -140,6 +134,18 @@ auto RenderBufferResolver::tryPrepareDrawBuffers(const DrawBufferPrepareRequest&
         out.index     = Some(resource::BufferUseHandle(request.buffer_uses[streams]));
     }
     return Ok(rstd::move(out));
+}
+
+auto RenderBufferResolver::tryPrepareDrawBuffers(const DrawBufferPrepareRequest& request)
+    -> Result<DrawBufferRefs, resource::ResourceError> {
+    auto refs = BuildDrawBufferRefs(request);
+    if (refs.is_err()) return refs;
+    for (auto use : request.buffer_uses)
+        if (m_resources.Resolve(use).is_none())
+            return Err(resource::ResourceError {
+                resource::ResourceErrorKind::MissingContent,
+                rstd::format("draw buffer use {}:{} unavailable", use.index, use.generation) });
+    return refs;
 }
 
 auto RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request)

@@ -80,6 +80,8 @@ auto   BuildDrawBufferKeys(const DrawBufferRequest&, u64 allocation_generation =
     -> Vec<DrawBufferKey>;
 auto BuildDrawBufferKeys(const DrawBufferPrepareRequest&, u64 allocation_generation = u64())
     -> Vec<DrawBufferKey>;
+auto BuildDrawBufferRefs(const DrawBufferPrepareRequest&)
+    -> Result<DrawBufferRefs, resource::ResourceError>;
 
 class RenderBufferResolver {
 public:
