@@ -132,23 +132,40 @@ class GraphBindings {
                 {},
                 session.lost() ? GraphExecutionCause::Native(VK_ERROR_DEVICE_LOST)
                                : GraphExecutionCause::Reason(GraphFailure::Closed) });
+        HashMap<graph_texture::Identity, ResourceId> owners[2];
         HashMap<graph_texture::Identity, AliasGroup> aliases[2];
-        Vec<Option<fg::Index>>                       slots;
-        Vec<bool>                                    shared;
+        const auto                                   shared_import = [&](ResourceId id) {
+            if (! layout.has_allocations()) return false;
+            auto resource = layout.resource(id);
+            return resource && resources[*resource].read_only_import;
+        };
+        // A physical identity needs alias counts only if multiple logical resources use it.
         for (usize i {}; i < entries_.len(); ++i) {
-            const auto& entry    = entries_[i];
-            auto        slot     = layout.slot(entry.id, entry.version);
-            auto        resource = layout.resource(entry.id);
-            bool        imported =
-                layout.has_allocations() && resource && resources[*resource].read_only_import;
-            slots.push(slot.clone());
-            shared.push(bool(imported));
             const auto& info = infos[i];
             if (info.kind != GraphResourceKind::Texture && info.kind != GraphResourceKind::Buffer)
                 continue;
-            auto& groups = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-            if (! groups.contains_key(info.identity)) groups.insert(info.identity, AliasGroup {});
-            groups.get_mut(info.identity).unwrap()->add(entry.id, slot, imported);
+            const auto kind  = info.kind == GraphResourceKind::Buffer ? 1 : 0;
+            const auto id    = entries_[i].id;
+            auto       owner = owners[kind].get(info.identity);
+            if (! owner)
+                owners[kind].insert(info.identity, id);
+            else if (**owner != id && ! aliases[kind].contains_key(info.identity))
+                aliases[kind].insert(info.identity, AliasGroup {});
+        }
+        if (! aliases[0].is_empty() || ! aliases[1].is_empty()) {
+            for (usize i {}; i < entries_.len(); ++i) {
+                const auto& info = infos[i];
+                if (info.kind != GraphResourceKind::Texture &&
+                    info.kind != GraphResourceKind::Buffer)
+                    continue;
+                auto& groups = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
+                if (groups.is_empty()) continue;
+                auto alias = groups.get_mut(info.identity);
+                if (! alias) continue;
+                const auto& entry = entries_[i];
+                (*alias)->add(
+                    entry.id, layout.slot(entry.id, entry.version), shared_import(entry.id));
+            }
         }
         for (const auto& resource : resources) {
             auto group = resources_.get(resource.id);
@@ -172,18 +189,23 @@ class GraphBindings {
                       (resource.aspects & ~info.aspects))))
                     return Err(
                         GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
-                auto&       groups     = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-                const auto& alias      = *groups.get(info.identity).unwrap();
-                const auto& own        = *alias.resources.get(entry.id).unwrap();
-                const auto& all_counts = shared[i] ? alias.counts.restricted : alias.counts.all;
-                const auto& own_counts = shared[i] ? own.restricted : own.all;
+                const auto& groups = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
+                if (groups.is_empty()) continue;
+                auto alias = groups.get(info.identity);
+                if (! alias) continue;
+                const auto& own        = *(*alias)->resources.get(entry.id).unwrap();
+                const auto  slot       = layout.slot(entry.id, entry.version);
+                const bool  shared     = shared_import(entry.id);
+                const auto& counts     = (*alias)->counts;
+                const auto& all_counts = shared ? counts.restricted : counts.all;
+                const auto& own_counts = shared ? own.restricted : own.all;
                 if (all_counts.total - own_counts.total !=
-                    all_counts.matches(slots[i]) - own_counts.matches(slots[i]))
+                    all_counts.matches(slot) - own_counts.matches(slot))
                     return Err(
                         GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
             }
         }
-        if (version_aliases) {
+        if (version_aliases && layout.has_allocations()) {
             struct VersionGroup {
                 HashMap<u32, graph_texture::Identity>       slots;
                 HashMap<graph_texture::Identity, fg::Index> identities;
@@ -191,11 +213,13 @@ class GraphBindings {
             HashMap<ResourceId, VersionGroup> groups;
             for (usize i {}; i < entries_.len(); ++i) {
                 const auto& entry = entries_[i];
-                if (! entry.version || ! slots[i]) continue;
+                if (! entry.version) continue;
+                auto allocation = layout.slot(entry.id, entry.version);
+                if (! allocation) continue;
                 if (! groups.contains_key(entry.id)) groups.insert(entry.id, VersionGroup {});
                 auto& group             = *groups.get_mut(entry.id).unwrap();
                 auto  identity          = infos[i].identity;
-                auto  slot              = *slots[i];
+                auto  slot              = *allocation;
                 auto  previous_identity = group.slots.get(u32(slot));
                 auto  previous_slot     = group.identities.get(identity);
                 if ((previous_identity && **previous_identity != identity) ||
