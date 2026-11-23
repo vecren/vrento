@@ -86,7 +86,7 @@ public:
 struct PipelinePreparation {
     resource::PipelineHandle               resource;
     resource::RenderPassHandle             render_pass;
-    vulkan::PipelineCacheKey               cache_key;
+    vulkan::PipelineVariantKey             cache_key;
     vulkan::RenderPassCacheKey             render_pass_key;
     bool                                   cache_hit { false };
     u64                                    cache_observed_count { 0 };
@@ -246,7 +246,7 @@ public:
     }
     auto SetPipelinePreparationMode(vulkan::PipelinePreparationMode mode)
         -> Result<empty, resource::ResourceError> {
-        if (! Ready() || ! m_pipeline_recipes.is_empty())
+        if (! Ready() || ! m_pipeline_recipes.is_empty() || ! m_pending_pipeline_uses.is_empty())
             return Err(resource::ResourceError { resource::ResourceErrorKind::Busy,
                                                  rstd::format("pipeline preparation is busy") });
         auto created = vulkan::PipelinePreparationQueue::create(TextureContext().session(), mode);
@@ -593,28 +593,76 @@ public:
                 .message = rstd::format("prepare graphics pipeline failed"),
             });
         }
+        return PublishPipeline(pipeline_use, render_pass_use, result.unwrap());
+    }
+
+    auto PreparePipeline(resource::PipelineUseHandle                         pipeline_use,
+                         resource::RenderPassUseHandle                       render_pass_use,
+                         const vulkan::Device&                               device,
+                         const rstd::sync::Arc<vulkan::PipelineStateRecipe>& source,
+                         resource::PipelineLayoutHandle                      layout,
+                         const vulkan::RenderPassResourceDesc&               signature)
+        -> Result<vrento::Preparation<PipelinePreparation>, resource::ResourceError> {
+        auto& pipelines = m_registries.Pipelines();
+        auto& layouts   = m_registries.PipelineLayouts();
+        auto  recipe    = pipelines.RegisterStateRecipe(device, source, layout, layouts);
+        if (recipe.is_err()) {
+            if (! m_pending_pipeline_uses.is_empty())
+                (void)m_pending_pipeline_uses.remove(pipeline_use);
+            return Err(recipe.unwrap_err());
+        }
+        if (m_pipeline_preparation) {
+            auto prepared = m_pipeline_preparation->prepare(recipe.unwrap(), signature);
+            if (prepared.is_ok() && prepared->status == PipelineReadiness::Pending) {
+                (void)m_pending_pipeline_uses.insert(pipeline_use);
+                return Ok(PendingPreparation {});
+            }
+            if (! m_pending_pipeline_uses.is_empty())
+                (void)m_pending_pipeline_uses.remove(pipeline_use);
+            if (prepared.is_err()) return Err(prepared.unwrap_err());
+            auto value = prepared.unwrap();
+            if (value.error) return Err(value.error.take().unwrap());
+            if (! value.pipeline)
+                return Err(
+                    resource::ResourceError { .kind = resource::ResourceErrorKind::MissingContent,
+                                              .message = "prepare graphics pipeline failed"_Str });
+            return PublishPipeline(pipeline_use, render_pass_use, value.pipeline.take().unwrap());
+        }
+        auto prepared = pipelines.TryEnsureRecipe(
+            device, recipe.unwrap(), signature, m_registries.RenderPassCache(), layouts);
+        if (prepared.is_err()) return Err(prepared.unwrap_err());
+        if (! prepared->ready()) return Ok(PendingPreparation {});
+        return PublishPipeline(pipeline_use, render_pass_use, prepared->take_ready());
+    }
+
+private:
+    auto PublishPipeline(resource::PipelineUseHandle   pipeline_use,
+                         resource::RenderPassUseHandle render_pass_use,
+                         PipelineResourceResult        result)
+        -> Result<vrento::Preparation<PipelinePreparation>, resource::ResourceError> {
         m_prepared.PublishPipeline(
             PreparedPipeline { .use         = pipeline_use,
-                               .resource    = result->handle,
-                               .render_pass = result->render_pass,
-                               .physical    = result->pipeline.clone() },
+                               .resource    = result.handle,
+                               .render_pass = result.render_pass,
+                               .physical    = result.pipeline.clone() },
             PreparedRenderPass { .use       = render_pass_use,
-                                 .resource  = result->render_pass,
-                                 .cache_key = result->render_pass_key.clone(),
-                                 .physical  = result->render_pass_physical.clone() });
+                                 .resource  = result.render_pass,
+                                 .cache_key = result.render_pass_key.clone(),
+                                 .physical  = result.render_pass_physical.clone() });
         return Ok(PipelinePreparation {
-            .resource                         = result->handle,
-            .render_pass                      = result->render_pass,
-            .cache_key                        = rstd::move(result->cache_key),
-            .render_pass_key                  = rstd::move(result->render_pass_key),
-            .cache_hit                        = result->cache_hit,
-            .cache_observed_count             = result->cache_observed_count,
-            .render_pass_cache_hit            = result->render_pass_cache_hit,
-            .render_pass_cache_observed_count = result->render_pass_cache_observed_count,
-            .physical                         = result->pipeline.clone(),
+            .resource                         = result.handle,
+            .render_pass                      = result.render_pass,
+            .cache_key                        = result.cache_key,
+            .render_pass_key                  = rstd::move(result.render_pass_key),
+            .cache_hit                        = result.cache_hit,
+            .cache_observed_count             = result.cache_observed_count,
+            .render_pass_cache_hit            = result.render_pass_cache_hit,
+            .render_pass_cache_observed_count = result.render_pass_cache_observed_count,
+            .physical                         = rstd::move(result.pipeline),
         });
     }
 
+public:
     auto PrepareFramebuffer(resource::FramebufferUseHandle         framebuffer_use,
                             resource::RenderPassUseHandle          render_pass_use,
                             const vulkan::Device&                  device,
@@ -1105,6 +1153,7 @@ private:
         for (const auto& entry : m_pipeline_recipes)
             m_registries.Pipelines().ReleaseRecipe(entry.recipe);
         m_pipeline_recipes.clear();
+        m_pending_pipeline_uses.clear();
     }
     void ClosePipelinePreparation() {
         if (m_pipeline_preparation) m_pipeline_preparation->close();
@@ -1120,6 +1169,7 @@ private:
     ResourcePrepareStatus                         m_prepare_status;
     Option<ResourcePrepareSession>                m_prepare_session;
     Vec<PipelineRecipeEntry>                      m_pipeline_recipes;
+    HashSet<resource::PipelineUseHandle>          m_pending_pipeline_uses;
     Option<vulkan::PipelinePreparationQueue>      m_pipeline_preparation;
     PreparedResourceTable                         m_prepared;
     Option<PrepareRollback>                       m_prepare_rollback;

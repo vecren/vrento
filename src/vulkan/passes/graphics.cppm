@@ -167,6 +167,11 @@ struct GraphicsDrawDesc {
     resource::RenderPassUseHandle     render_pass;
     PipelineResourceRequest           request;
     Option<PipelineLayoutRequirement> layout;
+    // With a shared state, request supplies only the current render pass.
+    Option<Arc<PipelineStateRecipe>> state;
+    auto                             pipeline_state() const -> const PipelineResourceRequest& {
+        return state ? (**state).state() : request;
+    }
     auto vulkan_io() const -> VulkanPassIO { return graphics_io(resources, graphics_draw_kind); }
     auto validate() const -> Result<empty, GraphError> { return validate_graphics(resources); }
     auto clone() const -> GraphicsDrawDesc {
@@ -174,7 +179,8 @@ struct GraphicsDrawDesc {
                  pipeline,
                  render_pass,
                  request.clone(),
-                 layout ? Some(layout->clone()) : None() };
+                 layout ? Some(layout->clone()) : None(),
+                 state.clone() };
     }
 };
 struct GraphicsClearDesc {
@@ -343,7 +349,8 @@ auto GraphicsDrawFactory::Compile(const GraphicsDrawDesc& desc, const PassExecut
     if ((*resources)->session().epoch() != context.session.epoch())
         return Err(GraphExecutionError { GraphExecutionStage::Device, pass.id });
     auto prepared =
-        (*resources)->Prepare(desc.pipeline, desc.render_pass, desc.request, context.session);
+        (*resources)
+            ->Prepare(desc.pipeline, desc.render_pass, desc.request, context.session, desc.state);
     if (prepared.is_err()) {
         auto                source = rstd::move(prepared).unwrap_err();
         GraphExecutionError error { GraphExecutionStage::Prepare, pass.id };

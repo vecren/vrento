@@ -291,7 +291,7 @@ struct PipelineResourceResult {
     resource::PipelineHandle   handle;
     resource::RenderPassHandle render_pass;
     Arc<vvk::RenderPass>       render_pass_physical;
-    PipelineCacheKey           cache_key;
+    PipelineVariantKey         cache_key;
     RenderPassCacheKey         render_pass_key;
     bool                       cache_hit { false };
     u64                        cache_observed_count { 0 };
@@ -854,7 +854,7 @@ public:
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::MissingDefinition,
                 .message = "pipeline recipe missing or incompatible"_Str });
-        auto key    = MakePipelineVariantKey((**found).state_key, render_pass);
+        auto key    = MakePipelineVariantKey((**found).state, m_generation, render_pass);
         auto cached = m_entries.get(key);
         if (cached)
             return Ok(PipelineBuildRequest { Arc<PipelineBuild>::make((**cached).pipeline.clone()),
@@ -870,6 +870,11 @@ public:
                 resource::ResourceError { .message = "pipeline queue limit or device lost"_Str });
         auto pass = passes.TryEnsure(device, render_pass);
         if (pass.is_err()) return Err(rstd::move(pass).unwrap_err());
+        auto layout = (**found).layout.upgrade();
+        if (! layout)
+            return Err(
+                resource::ResourceError { .kind    = resource::ResourceErrorKind::MissingDefinition,
+                                          .message = "pipeline layout unavailable"_Str });
         if (! m_driver.handle(device)) {
             auto initialized = m_driver.initialize(device);
             if (initialized.is_err())
@@ -883,7 +888,7 @@ public:
         desc.render_pass = render_pass;
         auto work        = Arc<PipelineBuild>::make(rstd::move(desc),
                                                     pass->render_pass.clone(),
-                                                    (**found).layout.clone(),
+                                                    rstd::move(layout),
                                                     m_driver.lease(device));
         ++m_stats.misses;
         (void)m_pending.insert(rstd::move(key), work.clone());
@@ -897,7 +902,7 @@ public:
         if (state.is_none())
             return Err(resource::ResourceError { .kind    = resource::ResourceErrorKind::Capacity,
                                                  .message = "pipeline state limit reached"_Str });
-        auto key = MakePipelineVariantKey(StateReferenceKey(*state), desc.render_pass);
+        auto key = MakePipelineVariantKey(*state, m_generation, desc.render_pass);
         return EnsureDescription(
             device, desc, desc.render_pass, rstd::move(key), render_pass_cache, pipeline_layouts);
     }
@@ -914,11 +919,42 @@ public:
         auto desc  = MakePipelineResourceDesc(request);
         auto state = InternState(MakePipelineStateKey(desc));
         if (state.is_none()) return None();
-        resource::PipelineRecipeHandle handle { m_next_recipe++, m_generation };
-        (void)m_recipes.insert(
-            handle,
-            Recipe { rstd::move(desc), StateReferenceKey(*state), rstd::move(layout).unwrap() });
-        return Some(handle);
+        return Some(InsertRecipe(rstd::move(desc), *state, layout.unwrap(), true));
+    }
+    auto RegisterStateRecipe(const Device& device, const Arc<PipelineStateRecipe>& source,
+                             resource::PipelineLayoutHandle layout_handle,
+                             const PipelineLayoutRegistry&  layouts)
+        -> Result<resource::PipelineRecipeHandle, resource::ResourceError> {
+        if (! BindDevice(device))
+            return Err(resource::ResourceError { .kind    = resource::ResourceErrorKind::Device,
+                                                 .message = "pipeline device mismatch"_Str });
+        const auto* identity = source.as_ptr().as_raw_ptr();
+        auto        bucket   = m_state_recipes.get(identity);
+        if (bucket)
+            for (const auto& binding : (**bucket).layouts)
+                if (binding.layout == layout_handle) return Ok(binding.recipe);
+
+        auto layout = layouts.Resolve(layout_handle);
+        if (! layout)
+            return Err(
+                resource::ResourceError { .kind    = resource::ResourceErrorKind::MissingDefinition,
+                                          .message = "pipeline layout unavailable"_Str });
+        auto desc            = MakePipelineResourceDesc(source->state());
+        desc.pipeline_layout = layout_handle;
+        desc.raster.depthClampEnable &= device.capabilities().depth_clamp;
+        auto state = InternState(MakePipelineStateKey(desc));
+        if (! state)
+            return Err(resource::ResourceError { .kind    = resource::ResourceErrorKind::Capacity,
+                                                 .message = "pipeline state limit reached"_Str });
+        auto handle = InsertRecipe(rstd::move(desc), *state, layout.unwrap(), false);
+        if (auto existing = m_state_recipes.get_mut(identity)) {
+            (**existing).layouts.push({ layout_handle, handle });
+        } else {
+            StateRecipes entry { source.downgrade(), {} };
+            entry.layouts.push({ layout_handle, handle });
+            (void)m_state_recipes.insert(identity, rstd::move(entry));
+        }
+        return Ok(handle);
     }
     auto TryEnsureRecipe(const Device& device, resource::PipelineRecipeHandle recipe,
                          const RenderPassResourceDesc& render_pass, RenderPassRegistry& passes,
@@ -930,7 +966,7 @@ public:
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::MissingDefinition,
                 .message = "pipeline recipe missing or incompatible"_Str });
-        auto key = MakePipelineVariantKey((**found).state_key, render_pass);
+        auto key = MakePipelineVariantKey((**found).state, m_generation, render_pass);
         return EnsureDescription(
             device, (**found).desc, render_pass, rstd::move(key), passes, layouts);
     }
@@ -952,12 +988,14 @@ public:
                                       MakeRenderPassCacheKey(desc.render_pass));
     }
     auto ReleaseRecipe(resource::PipelineRecipeHandle recipe) -> bool {
+        auto found = m_recipes.get(recipe);
+        if (! found || ! (**found).retained_layout) return false;
         return m_recipes.remove(recipe).is_some();
     }
 
 private:
     auto EnsureDescription(const Device& device, const PipelineResourceDesc& desc,
-                           const RenderPassResourceDesc& render_pass_desc, PipelineCacheKey key,
+                           const RenderPassResourceDesc& render_pass_desc, PipelineVariantKey key,
                            RenderPassRegistry&     render_pass_cache,
                            PipelineLayoutRegistry& pipeline_layouts)
         -> Result<vrento::Preparation<PipelineResourceResult>, resource::ResourceError> {
@@ -1035,7 +1073,7 @@ private:
         m_stats.creation_nanoseconds += entry->creation_nanoseconds;
         auto handle = NextHandle();
         (void)m_handles.insert(handle, entry.downgrade());
-        (void)m_entries.insert(key.clone(),
+        (void)m_entries.insert(PipelineVariantKey(key),
                                Entry {
                                    .pipeline             = entry.clone(),
                                    .handle               = handle,
@@ -1063,7 +1101,17 @@ private:
 public:
     void PruneExpired() {
         ++m_collection;
-        m_entries.retain([&](const PipelineCacheKey&, Entry& entry) {
+        m_state_recipes.retain([&](const PipelineStateRecipe* const&, StateRecipes& entry) {
+            const bool expired = entry.source.expired();
+            entry.layouts.retain([&](const StateRecipeBinding& binding) {
+                auto recipe = m_recipes.get(binding.recipe);
+                if (! expired && recipe && ! (**recipe).layout.expired()) return true;
+                (void)m_recipes.remove(binding.recipe);
+                return false;
+            });
+            return ! entry.layouts.is_empty();
+        });
+        m_entries.retain([&](const PipelineVariantKey&, Entry& entry) {
             if (entry.pipeline.strong_count() > usize(1) ||
                 m_collection - entry.last_used <= m_limits.unused_collections)
                 return true;
@@ -1072,14 +1120,14 @@ public:
             return false;
         });
         while (m_entries.len() > m_limits.max_entries) {
-            Option<PipelineCacheKey> oldest;
-            u64                      last_used = u64::MAX;
-            auto                     entries   = m_entries.iter();
+            Option<PipelineVariantKey> oldest;
+            u64                        last_used = u64::MAX;
+            auto                       entries   = m_entries.iter();
             while (auto item = entries.next()) {
                 auto key   = item->template get<0>();
                 auto entry = item->template get<1>();
                 if (entry->pipeline.strong_count() == usize(1) && entry->last_used <= last_used) {
-                    oldest    = Some(key->clone());
+                    oldest    = Some(PipelineVariantKey(*key));
                     last_used = entry->last_used;
                 }
             }
@@ -1112,6 +1160,7 @@ public:
         m_collection = u64();
         m_stats      = {};
         m_recipes.clear();
+        m_state_recipes.clear();
         m_next_recipe = u64();
         m_states.clear();
         m_next_state = u64();
@@ -1144,17 +1193,30 @@ private:
         (void)m_states.insert(rstd::move(key), u64(id));
         return Some(id);
     }
-    auto StateReferenceKey(u64 id) const -> PipelineCacheKey {
-        PipelineKeyWriter writer;
-        writer.writeString("registered-pipeline-state-v1"_str);
-        writer.writeU64(m_generation.to_primitive());
-        writer.writeU64(id.to_primitive());
-        return ToPipelineCacheKey(rstd::move(writer).finish());
+    auto InsertRecipe(PipelineResourceDesc desc, u64 state, Arc<PipelineLayoutResourceEntry> layout,
+                      bool retain_layout) -> resource::PipelineRecipeHandle {
+        resource::PipelineRecipeHandle handle { m_next_recipe++, m_generation };
+        auto                           weak = layout.downgrade();
+        (void)m_recipes.insert(handle,
+                               Recipe { rstd::move(desc),
+                                        state,
+                                        rstd::move(weak),
+                                        retain_layout ? Some(rstd::move(layout)) : None() });
+        return handle;
     }
     struct Recipe {
-        PipelineResourceDesc             desc;
-        PipelineCacheKey                 state_key;
-        Arc<PipelineLayoutResourceEntry> layout;
+        PipelineResourceDesc                     desc;
+        u64                                      state;
+        Weak<PipelineLayoutResourceEntry>        layout;
+        Option<Arc<PipelineLayoutResourceEntry>> retained_layout;
+    };
+    struct StateRecipeBinding {
+        resource::PipelineLayoutHandle layout;
+        resource::PipelineRecipeHandle recipe;
+    };
+    struct StateRecipes {
+        Weak<PipelineStateRecipe> source;
+        Vec<StateRecipeBinding>   layouts;
     };
     struct Entry {
         Arc<PipelineResourceEntry> pipeline;
@@ -1172,19 +1234,19 @@ private:
 
     using HandleMap = HashMap<resource::PipelineHandle, Weak<PipelineResourceEntry>>;
 
-    HashMap<PipelineCacheKey, Entry, rstd::hash::RandomState, PipelineCacheKeyEqual> m_entries;
-    HashMap<PipelineCacheKey, Arc<PipelineBuild>, rstd::hash::RandomState, PipelineCacheKeyEqual>
-                                                    m_pending;
-    u64                                             m_generation { 1 };
-    u64                                             m_next_index { 0 };
-    HandleMap                                       m_handles;
-    PipelineCacheLimits                             m_limits;
-    PipelineCacheStats                              m_stats;
-    DriverPipelineCache                             m_driver;
-    VkDevice                                        m_device {};
-    u64                                             m_collection {};
-    HashMap<resource::PipelineRecipeHandle, Recipe> m_recipes;
-    u64                                             m_next_recipe {};
+    HashMap<PipelineVariantKey, Entry>                m_entries;
+    HashMap<PipelineVariantKey, Arc<PipelineBuild>>   m_pending;
+    u64                                               m_generation { 1 };
+    u64                                               m_next_index { 0 };
+    HandleMap                                         m_handles;
+    PipelineCacheLimits                               m_limits;
+    PipelineCacheStats                                m_stats;
+    DriverPipelineCache                               m_driver;
+    VkDevice                                          m_device {};
+    u64                                               m_collection {};
+    HashMap<resource::PipelineRecipeHandle, Recipe>   m_recipes;
+    HashMap<const PipelineStateRecipe*, StateRecipes> m_state_recipes;
+    u64                                               m_next_recipe {};
     HashMap<PipelineCacheKey, u64, rstd::hash::RandomState, PipelineCacheKeyEqual> m_states;
     u64                                                                            m_next_state {};
 };

@@ -101,6 +101,17 @@ struct PipelineCacheKey {
     }
 };
 
+struct PipelineVariantKey {
+    u64                   state {};
+    u64                   generation {};
+    VkFormat              color { VK_FORMAT_UNDEFINED };
+    VkFormat              depth { VK_FORMAT_UNDEFINED };
+    VkSampleCountFlagBits samples {};
+    rstd::uint32_t        attachments {};
+
+    bool operator==(const PipelineVariantKey&) const = default;
+};
+
 struct RenderPassCacheKey {
     rstd::size_t value { 0 };
     Vec<u8>      bytes;
@@ -625,6 +636,15 @@ inline PipelineResourceDesc MakePipelineResourceDesc(const PipelineResourceReque
     };
 }
 
+class PipelineStateRecipe {
+public:
+    explicit PipelineStateRecipe(PipelineResourceRequest request): request_(rstd::move(request)) {}
+    auto state() const -> const PipelineResourceRequest& { return request_; }
+
+private:
+    const PipelineResourceRequest request_;
+};
+
 inline FramebufferResourceDesc
 MakeFramebufferResourceDesc(const FramebufferResourceRequest& request) {
     return FramebufferResourceDesc {
@@ -731,6 +751,17 @@ inline PipelineCacheKey MakePipelineVariantKey(const PipelineCacheKey&       sta
     return key;
 }
 
+inline auto MakePipelineVariantKey(u64 state, u64 generation, const RenderPassResourceDesc& pass)
+    -> PipelineVariantKey {
+    return { state,
+             generation,
+             pass.has_color_attachment ? pass.color_format : VK_FORMAT_UNDEFINED,
+             pass.has_depth_attachment ? pass.depth_format : VK_FORMAT_UNDEFINED,
+             pass.samples,
+             (pass.has_color_attachment ? 1u : 0u) | (pass.has_depth_attachment ? 2u : 0u) |
+                 (pass.has_resolve_attachment ? 4u : 0u) };
+}
+
 inline PipelineCacheKey MakePipelineCacheKey(const PipelineResourceDesc& desc) {
     return MakePipelineVariantKey(MakePipelineStateKey(desc), desc.render_pass);
 }
@@ -775,6 +806,20 @@ inline FramebufferCacheKey MakeFramebufferCacheKey(const FramebufferResourceRequ
 
 export namespace rstd
 {
+
+template<>
+struct Impl<hash::Hash, vrento::vulkan::PipelineVariantKey>
+    : ImplBase<vrento::vulkan::PipelineVariantKey> {
+    template<typename H>
+        requires Impled<H, hash::Hasher>
+    void hash(H& state) const noexcept {
+        const auto& key = this->self();
+        hash::hash_into(key.state, state);
+        hash::hash_into(key.generation, state);
+        hash::hash_into((rstd::uint64_t(key.color) << 32) | rstd::uint32_t(key.depth), state);
+        hash::hash_into((rstd::uint32_t(key.samples) << 3) | key.attachments, state);
+    }
+};
 
 template<>
 struct Impl<hash::Hash, vrento::vulkan::PipelineCacheKey>

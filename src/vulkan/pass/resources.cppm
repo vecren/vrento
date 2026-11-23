@@ -34,7 +34,8 @@ public:
         return None();
     }
     auto Prepare(resource::PipelineUseHandle pipeline, resource::RenderPassUseHandle render_pass,
-                 const PipelineResourceRequest& recipe, const DeviceSession& session) const
+                 const PipelineResourceRequest& recipe, const DeviceSession& session,
+                 const Option<Arc<PipelineStateRecipe>>& state = None()) const
         -> Result<vrento::Preparation<resource_registry::PipelinePreparation>,
                   resource::ResourceError> {
         auto layout = layouts_.Resolve(pipeline);
@@ -42,11 +43,20 @@ public:
             return Err(
                 resource::ResourceError { .kind    = resource::ResourceErrorKind::MissingDefinition,
                                           .message = "pipeline layout unavailable"_Str });
-        auto request            = recipe.clone();
-        request.pipeline_layout = *layout;
-        request.raster.depthClampEnable &= session.device().capabilities().depth_clamp;
-        auto result =
-            owner_->PreparePipeline(pipeline, render_pass, session.device(), rstd::move(request));
+        auto result = [&] {
+            if (state)
+                return owner_->PreparePipeline(pipeline,
+                                               render_pass,
+                                               session.device(),
+                                               *state,
+                                               *layout,
+                                               MakeRenderPassResourceDesc(recipe));
+            auto request            = recipe.clone();
+            request.pipeline_layout = *layout;
+            request.raster.depthClampEnable &= session.device().capabilities().depth_clamp;
+            return owner_->PreparePipeline(
+                pipeline, render_pass, session.device(), rstd::move(request));
+        }();
         if (result.is_err()) {
             auto error = result.unwrap_err();
             error.contexts.push(resource::ResourceErrorContext::Pipeline(pipeline, render_pass));
@@ -61,7 +71,7 @@ public:
             { pipeline,
               resource_registry::PipelinePreparation { value.resource,
                                                        value.render_pass,
-                                                       value.cache_key.clone(),
+                                                       value.cache_key,
                                                        value.render_pass_key.clone(),
                                                        value.cache_hit,
                                                        value.cache_observed_count,

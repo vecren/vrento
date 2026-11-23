@@ -191,8 +191,9 @@ TEST(PipelineCache, EqualHashAndMetadataStillCheckShaderContent) {
     auto pass = MakeRenderPassResourceDesc(original);
     EXPECT_FALSE(SamePipelineCacheKey(MakePipelineVariantKey(first, pass),
                                       MakePipelineVariantKey(different, pass)));
-    rstd::collections::HashMap<PipelineCacheKey, u32, rstd::hash::RandomState, PipelineCacheKeyEqual>
-        entries;
+    rstd::collections::
+        HashMap<PipelineCacheKey, u32, rstd::hash::RandomState, PipelineCacheKeyEqual>
+            entries;
     (void)entries.insert(first.clone(), u32(1));
     (void)entries.insert(different.clone(), u32(2));
     EXPECT_EQ(entries.len(), usize(2));
@@ -274,6 +275,63 @@ TEST(PipelineCache, RetentionAndRenderPass) {
     rstd_assert(pipelines.ReleaseRecipe(recipe));
     rstd_assert(pipelines.EnsureRecipe(session.device(), recipe, scope, passes, layouts).is_none());
     rstd_assert(session.validation_errors() == 0);
+}
+TEST(PipelineCache, RetainedStateRecipeSeparatesLayoutAndRenderPass) {
+    auto  session  = DeviceSession::create({ .validation = true }).unwrap();
+    auto& graphics = session.graphics_resources();
+    auto& device   = session.device();
+    auto  layout   = graphics.layouts.Ensure(device, {}, graphics.descriptors).unwrap();
+    auto  source   = Some(Arc<PipelineStateRecipe>::make(request({})));
+    auto  get      = [&](const Arc<PipelineStateRecipe>& state, auto handle) {
+        return graphics.pipelines.RegisterStateRecipe(device, state, handle, graphics.layouts)
+            .unwrap();
+    };
+    auto recipe = get(*source, layout.handle);
+    EXPECT_EQ(get(*source, layout.handle), recipe);
+    auto equivalent   = Arc<PipelineStateRecipe>::make(request({}));
+    auto other_recipe = get(equivalent, layout.handle);
+    auto signature    = MakeRenderPassResourceDesc((*source)->state());
+    auto ensure       = [&](auto id) {
+        return graphics.pipelines
+            .EnsureRecipe(device, id, signature, graphics.passes, graphics.layouts)
+            .unwrap();
+    };
+    auto first              = ensure(recipe);
+    signature.color_load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    auto same               = ensure(other_recipe);
+    EXPECT_TRUE(same.cache_hit);
+    EXPECT_EQ(same.handle, first.handle);
+    EXPECT_NE(same.render_pass, first.render_pass);
+    signature.color_format = VK_FORMAT_R8G8B8A8_SRGB;
+    EXPECT_NE(ensure(recipe).handle, first.handle);
+    signature.samples = VK_SAMPLE_COUNT_4_BIT;
+    EXPECT_TRUE(graphics.pipelines
+                    .TryEnsureRecipe(device, recipe, signature, graphics.passes, graphics.layouts)
+                    .is_err());
+    signature.samples                  = VK_SAMPLE_COUNT_1_BIT;
+    signature.color_format             = VK_FORMAT_R8G8B8A8_UNORM;
+    auto changed                       = request({});
+    changed.color_blend.colorWriteMask = 7;
+    auto new_state                     = Arc<PipelineStateRecipe>::make(rstd::move(changed));
+    EXPECT_NE(ensure(get(new_state, layout.handle)).handle, first.handle);
+
+    PipelineLayoutRequest with_constants;
+    with_constants.push_constants.push({ VK_SHADER_STAGE_VERTEX_BIT, 0, 4 });
+    auto other_layout =
+        graphics.layouts.Ensure(device, with_constants, graphics.descriptors).unwrap();
+    auto layout_recipe = get(*source, other_layout.handle);
+    EXPECT_NE(layout_recipe, recipe);
+    EXPECT_NE(ensure(layout_recipe).handle, first.handle);
+    source = None();
+    graphics.pipelines.PruneExpired();
+    EXPECT_TRUE(graphics.pipelines
+                    .TryEnsureRecipe(device, recipe, signature, graphics.passes, graphics.layouts)
+                    .is_err());
+    EXPECT_EQ(ensure(other_recipe).handle, first.handle);
+    graphics.pipelines.Reset();
+    auto new_recipe = get(equivalent, layout.handle);
+    EXPECT_NE(new_recipe.generation, other_recipe.generation);
+    EXPECT_EQ(session.validation_errors(), 0);
 }
 TEST(PipelineCache, DriverData) {
     auto  session  = DeviceSession::create({ .validation = true }).unwrap();
@@ -443,6 +501,41 @@ TEST(PipelineCache, ResourcePreparationPending) {
     rstd_assert(resources.Prepared().Resolve(second).is_none());
     resources.Reset();
     rstd_assert(session.validation_errors() == 0);
+}
+TEST(PipelineCache, RetainedStateRecipeSurvivesDeferredGraphUses) {
+    auto                 session = DeviceSession::create({ .validation = true }).unwrap();
+    RenderResourceSystem resources;
+    ASSERT_TRUE(resources.Initialize(session));
+    resources.SetPipelinePreparationMode(PipelinePreparationMode::Deferred).unwrap();
+    auto& graphics  = session.graphics_resources();
+    auto  layout    = graphics.layouts.Ensure(session.device(), {}, graphics.descriptors).unwrap();
+    auto  state     = Arc<PipelineStateRecipe>::make(request({}));
+    auto  signature = MakeRenderPassResourceDesc(state->state());
+    auto  begin     = [&](u64 index) {
+        return resources.PreparePipeline({ index, u64(1) },
+                                         { index, u64(1) },
+                                         session.device(),
+                                         state,
+                                         layout.handle,
+                                         signature);
+    };
+    ASSERT_FALSE(begin(u64(1)).unwrap().ready());
+    EXPECT_EQ(resources.SetPipelinePreparationMode(PipelinePreparationMode::Synchronous)
+                  .unwrap_err()
+                  .kind,
+              vrento::resource::ResourceErrorKind::Busy);
+    auto start = rstd::time::Instant::now();
+    for (;;) {
+        auto prepared = begin(u64(1)).unwrap();
+        if (prepared.ready()) break;
+        ASSERT_LT(start.elapsed().as_secs(), u64(5));
+        rstd::thread::sleep(rstd::time::Duration::from_millis(u64(1)));
+    }
+    resources.AbortPreparePlan();
+    auto warm = begin(u64(2)).unwrap().take_ready();
+    EXPECT_TRUE(warm.cache_hit);
+    EXPECT_EQ(graphics.pipelines.stats().creations, u64(1));
+    EXPECT_EQ(session.validation_errors(), 0);
 }
 TEST(PipelineCache, PreparationDeviceLoss) {
     auto  session  = DeviceSession::create({ .validation = true }).unwrap();
