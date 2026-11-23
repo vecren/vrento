@@ -18,16 +18,26 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
     if (mapping.scope != frame.bindings.scope() || prepared.Generation() != u64(mapping.scope))
         return Err(GraphExecutionError { GraphExecutionStage::Binding });
     for (const auto& external : mapping.externals)
-        if (! frame.bindings.resolve(external.version.resource, external.version.version))
-            return Err(GraphExecutionError {
-                GraphExecutionStage::Binding, {}, external.version.resource });
+        if (! frame.bindings.resolve(external.resource, external.version))
+            return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, external.resource });
+    HashMap<resource::TextureUseHandle, usize> chosen;
+    for (usize i {}; i < selections.len(); ++i) {
+        const auto& selection = selections[i];
+        if (auto old = chosen.get(selection.use)) {
+            const auto& view = selections[**old].view;
+            if (view.texture().identity() != selection.view.texture().identity() ||
+                view.description() != selection.view.description())
+                return Err(GraphExecutionError { GraphExecutionStage::Binding });
+        } else {
+            (void)chosen.insert(selection.use, i);
+        }
+    }
     for (const auto& binding : mapping.textures) {
         auto version = binding.resource.version;
         auto value   = prepared.Resolve(binding.resource.handle);
         if (! value)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        auto definition = binding.content.texture();
-        if (! definition || (**value).definition.id() != definition->id())
+        if ((**value).definition.id() != binding.definition.id())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
         auto selected = (**value).ActiveTexture();
         if (selected.is_err())
@@ -37,17 +47,7 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
                 version.resource,
                 vrento::vulkan::GraphExecutionCause::Texture(selected.unwrap_err()) });
         auto view = selected->view;
-        bool overridden {};
-        for (const auto& selection : selections)
-            if (selection.use == binding.resource.handle) {
-                if (overridden &&
-                    (view.texture().identity() != selection.view.texture().identity() ||
-                     view.description() != selection.view.description()))
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-                view       = selection.view;
-                overridden = true;
-            }
+        if (auto index = chosen.get(binding.resource.handle)) view = selections[**index].view;
         if (! view.valid())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
         const auto& range    = view.description().range;
@@ -70,27 +70,27 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
             version, Arc<dyn<GraphBinding>>::make(GraphTextureBinding(view)));
         if (bound.is_err()) return Err(bound.unwrap_err());
     }
+    HashMap<fg::ResourceVersion, usize> buffers;
+    for (usize i {}; i < frame.buffers.len(); ++i)
+        (void)buffers.insert(frame.buffers[i].version, i);
     for (const auto& binding : mapping.buffers) {
         auto version = binding.resource.version;
         auto value   = prepared.Resolve(binding.resource.use);
         if (! value)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        auto definition = binding.content.buffer();
-        if (! definition || (**value).buffer.definition.id() != definition->id())
+        if ((**value).buffer.definition.id() != binding.definition.id())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
         const auto& allocation = (**value).buffer.physical->buffer;
         if (binding.range.offset > allocation.size() ||
             binding.range.size > allocation.size() - binding.range.offset)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        bool exists {};
-        for (const auto& buffer : frame.buffers)
-            if (buffer.version == version) {
-                if (buffer.allocation.identity() != allocation.identity())
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-                exists = true;
-            }
-        if (! exists) frame.buffers.push({ version, allocation.clone() });
+        if (auto index = buffers.get(version)) {
+            if (frame.buffers[**index].allocation.identity() != allocation.identity())
+                return Err(
+                    GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
+        } else {
+            frame.buffers.push({ version, allocation.clone() });
+        }
     }
     return Ok(empty {});
 }

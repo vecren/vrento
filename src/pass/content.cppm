@@ -34,12 +34,6 @@ public:
             else
                 return graph.scope();
         }();
-        auto versions = [&] {
-            if constexpr (rstd::mtp::same_as<Graph, fg::FrameGraphBuilder>)
-                return graph.data().versions.as_slice();
-            else
-                return graph.versions();
-        }();
         auto node = graph.find_version(version);
         if (! node || (texture && buffer) || (texture && ! texture->valid()) ||
             (buffer && ! buffer->valid()))
@@ -49,14 +43,9 @@ public:
         result.version_ = version;
         result.texture_ = rstd::move(texture);
         result.buffer_  = rstd::move(buffer);
-        if (node->writer) {
-            fg::Index index {};
-            for (const auto& candidate : versions) {
-                if (candidate.id == version) break;
-                if (candidate.writer == node->writer) ++index;
-            }
-            result.output_ = Some(OutputRef { scope, *node->writer, index });
-        }
+        if (node->writer)
+            result.output_ =
+                Some(OutputRef { scope, *node->writer, graph.output_ordinal(version) });
         return Ok(rstd::move(result));
     }
     static auto write(fg::FrameGraphBuilder& graph, fg::PassId pass, const ContentRef& previous,

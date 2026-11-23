@@ -58,6 +58,25 @@ TEST(FrameGraph, SlotsAndLastWrites) {
         if (life.version == c)
             rstd_assert(life.first == 2 && life.last == 2 && life.uses.len() == usize(1));
 }
+TEST(FrameGraph, ResourceAccessBoundsDoNotReplaceExactUses) {
+    FrameGraphBuilder builder(9);
+    auto              source =
+        builder.import_resource({ .id = { 17, 9 }, .mip_levels = 4, .layers = 2 }).unwrap();
+    auto first  = builder.add_pass({ 50 }).unwrap();
+    auto second = builder.add_pass({ 7 }).unwrap();
+    builder.read(first, source, Some(ResourceRange { .first_layer = 1 })).unwrap();
+    builder.read(second, source, Some(ResourceRange { .first_mip = 2 })).unwrap();
+    auto graph  = rstd::move(builder).finish().unwrap();
+    auto access = graph.version_access(source);
+    EXPECT_TRUE(access.read);
+    EXPECT_FALSE(graph.has_resource_writes(source.resource));
+    EXPECT_EQ(access.bounds.mip_count, 3u);
+    EXPECT_EQ(access.bounds.layer_count, 2u);
+    EXPECT_EQ(graph.find_pass(first)->uses[usize()].range.first_layer, 1u);
+    EXPECT_EQ(graph.find_pass(second)->uses[usize()].range.first_mip, 2u);
+    EXPECT_EQ(graph.pass_slot(second), 1u);
+    EXPECT_NE(graph.allocation_slot(source), invalid_index);
+}
 TEST(FrameGraph, OverwriteAndConcurrentVersions) {
     FrameGraphBuilder graph(1);
     auto              value       = graph.create_resource(texture(1)).unwrap();
@@ -565,7 +584,7 @@ TEST(FrameGraphResources, TransparentBootstrapRequiresExplicitOwnedColorFeedback
         }
         auto bindings = resources.bindings(built, plan).unwrap();
         for (const auto& binding : bindings.textures)
-            EXPECT_EQ(binding.content.texture()->revision(), definition.revision());
+            EXPECT_EQ(binding.definition.revision(), definition.revision());
     }
 }
 } // namespace vrento_test::frame_graph

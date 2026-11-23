@@ -134,7 +134,6 @@ class CompiledGraph {
         GraphSerial           revision;
         Arc<dyn<VulkanPass>>  native;
         Arc<dyn<PassFactory>> factory;
-        usize                 description {};
     };
     struct Data {
         VulkanPassSet                         graph;
@@ -144,18 +143,16 @@ class CompiledGraph {
         Option<Arc<GraphicsCompileResources>> resources;
         Arc<ExecutionCounters>                execution;
         Arc<PassBindingOwner>                 identity { Arc<PassBindingOwner>::make() };
-        HashMap<PassId, usize>                indices;
         Arc<Vec<usize>>                       routes;
         Data(VulkanPassSet set, DeviceSession device, GraphInput values, Vec<Entry> passes,
              Option<Arc<GraphicsCompileResources>> context, Arc<ExecutionCounters> counters,
-             HashMap<PassId, usize> index, Vec<usize> dispatch)
+             Vec<usize> dispatch)
             : graph(rstd::move(set)),
               session(rstd::move(device)),
               input(rstd::move(values)),
               entries(rstd::move(passes)),
               resources(rstd::move(context)),
               execution(rstd::move(counters)),
-              indices(rstd::move(index)),
               routes(Arc<Vec<usize>>::make(rstd::move(dispatch))) {}
     };
     Arc<Data> data_;
@@ -166,33 +163,11 @@ class CompiledGraph {
                         Vec<Entry> entries, Option<Arc<GraphicsCompileResources>> resources,
                         Arc<ExecutionCounters> execution)
         -> Result<CompiledGraph, GraphExecutionError> {
-        auto descriptions = input.descriptions();
-        if (entries.len() != descriptions.len() || entries.len() != graph.passes().len())
-            return Err(GraphExecutionError { GraphExecutionStage::Schema });
-        HashMap<PassId, usize> descriptions_by_id;
-        for (usize i {}; i < descriptions.len(); ++i)
-            if (descriptions_by_id.insert(descriptions[i].execution().id, i))
-                return Err(GraphExecutionError { GraphExecutionStage::Schema,
-                                                 descriptions[i].execution().id });
-        HashMap<PassId, usize> indices;
+        Vec<usize> routes;
+        routes.resize(graph.passes().len(), usize());
         for (usize i {}; i < entries.len(); ++i) {
-            auto& entry = entries[i];
-            auto  found = descriptions_by_id.get(entry.id);
-            if (! found || indices.insert(entry.id, i))
-                return Err(GraphExecutionError { GraphExecutionStage::Schema, entry.id });
-            const auto& desc = descriptions[**found];
-            if (desc.scope() != graph.scope() || desc.revision() != entry.revision ||
-                desc.type() != entry.factory->Type() ||
-                entry.native.as_ptr().as_ptr().as_ref().concrete_type_id() !=
-                    entry.factory->PassType())
-                return Err(GraphExecutionError { GraphExecutionStage::Schema, entry.id });
-            entry.description = **found;
-        }
-        auto routes = Vec<usize>::with_capacity(graph.passes().len());
-        for (const auto& pass : graph.passes()) {
-            auto index = indices.get(pass.id);
-            if (! index) return Err(GraphExecutionError { GraphExecutionStage::Schema, pass.id });
-            routes.push(usize(**index));
+            auto slot           = graph.frame_graph().pass_slot(entries[i].id);
+            routes[usize(slot)] = i;
         }
         return Ok(CompiledGraph(Arc<Data>::make(rstd::move(graph),
                                                 rstd::move(session),
@@ -200,7 +175,6 @@ class CompiledGraph {
                                                 rstd::move(entries),
                                                 rstd::move(resources),
                                                 rstd::move(execution),
-                                                rstd::move(indices),
                                                 rstd::move(routes))));
     }
 
@@ -210,10 +184,10 @@ public:
     auto operator=(CompiledGraph&&) -> CompiledGraph& = default;
     auto description() const -> const VulkanPassSet& { return data_->graph; }
     auto description(PassId id) const -> Option<ref<PassInput>> {
-        auto index = data_->indices.get(id);
-        if (! index) return None();
+        auto slot = data_->graph.frame_graph().pass_slot(id);
+        if (slot == fg::invalid_index) return None();
         return Some(ref<PassInput>::from_raw_parts(
-            &data_->input.descriptions()[data_->entries[**index].description]));
+            &data_->input.descriptions()[(*data_->routes)[usize(slot)]]));
     }
     auto input() const -> const GraphInput& { return data_->input; }
     auto descriptions() const -> slice<PassInput> { return data_->input.descriptions(); }
@@ -221,16 +195,18 @@ public:
     template<typename T>
     auto frame(PassId id, GraphSerial revision, typename T::FrameData input) const
         -> Result<PassFrameBinding, GraphExecutionError> {
-        auto index = data_->indices.get(id);
-        if (! index) return Err(GraphExecutionError { GraphExecutionStage::Schema, id });
-        const auto& entry = data_->entries[**index];
+        auto slot = data_->graph.frame_graph().pass_slot(id);
+        if (slot == fg::invalid_index)
+            return Err(GraphExecutionError { GraphExecutionStage::Schema, id });
+        auto        index = (*data_->routes)[usize(slot)];
+        const auto& entry = data_->entries[index];
         if (entry.revision != revision ||
             ! try_vulkan_pass<T>(entry.native.as_ptr().as_ptr().as_ref()))
             return Err(GraphExecutionError { GraphExecutionStage::Schema, id });
         auto binding = Arc<dyn<VulkanPass>>::make(BoundVulkanPass<T> {
             entry.native.clone(), Arc<typename T::FrameData>::make(rstd::move(input)) });
         return Ok(PassFrameBinding(data_->identity.clone(),
-                                   **index,
+                                   index,
                                    id,
                                    revision,
                                    entry.native.clone(),

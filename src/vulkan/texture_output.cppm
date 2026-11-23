@@ -109,15 +109,32 @@ inline auto texture_output_frame(const DeviceSession&                           
     result.draws.push({ 4, 0 });
     return Ok(rstd::move(result));
 }
+inline auto declare_graphics_surface_output(fg::FrameGraphBuilder& graph, PassId draw_id,
+                                            PassId release_id, pass::ContentRef source,
+                                            pass::ContentRef target, GraphicsDrawDesc draw)
+    -> Result<DeclaredSurfaceOutput, GraphError> {
+    auto added = graph.add_pass(draw_id);
+    if (added.is_err()) return Err(added.unwrap_err());
+    auto output = pass::ContentRef::write(graph, draw_id, target);
+    if (output.is_err()) return Err(output.unwrap_err());
+    draw.resources.textures.push({ rstd::move(source) });
+    draw.resources.attachments.color =
+        Some(GraphicsAttachment { .target = output->clone(), .load = AttachmentLoad::Discard });
+    auto input = declare_input(graph, draw_id, rstd::move(draw));
+    if (input.is_err()) return Err(input.unwrap_err());
+    auto release =
+        declare_input(graph, release_id, SurfaceReleaseDesc { output->clone(), PassStages::Color });
+    if (release.is_err()) return Err(release.unwrap_err());
+    return Ok(DeclaredSurfaceOutput { input.unwrap(), release.unwrap(), output->version() });
+}
 class TextureOutput {
     struct Prepared {
         Arc<resource_registry::RenderResourceSystem> resources;
         resource::DescriptorBindingHandle            descriptor;
-        GraphicsDrawDesc                             graphics;
         ~Prepared() { resources->RemovePreparedDescriptor(descriptor); }
         Prepared(Arc<resource_registry::RenderResourceSystem> owner,
-                 resource::DescriptorBindingHandle binding, GraphicsDrawDesc recipe)
-            : resources(rstd::move(owner)), descriptor(binding), graphics(rstd::move(recipe)) {}
+                 resource::DescriptorBindingHandle            binding)
+            : resources(rstd::move(owner)), descriptor(binding) {}
     };
     Option<resource::TextureUseHandle>                   source_;
     VkFormat                                             format_ { VK_FORMAT_UNDEFINED };
@@ -148,16 +165,12 @@ public:
                          : None<resource::DescriptorBindingHandle>();
     }
     auto graphics() const -> bool { return format_ != VK_FORMAT_UNDEFINED; }
-    auto layout_requirement() const -> Option<PipelineLayoutRequirement> {
-        return pipeline_ ? Some(texture_output_layout(*pipeline_))
-                         : None<PipelineLayoutRequirement>();
-    }
     void clear() {
         prepared_  = None();
         resources_ = None();
     }
     auto prepare(Arc<resource_registry::RenderResourceSystem> resources,
-                 ref<dyn<ShaderBackend>> shaders, const PipelineLayoutAssignments& layouts)
+                 const PipelineLayoutAssignments&             layouts)
         -> Result<empty, resource::ResourceError> {
         auto missing = [] {
             return Err(
@@ -172,12 +185,6 @@ public:
         if (! pipeline_ || ! render_pass_) return missing();
         auto layout = layouts.Resolve(*pipeline_);
         if (! layout) return missing();
-        auto recipe =
-            prepared_ && (*prepared_)->graphics.request.pipeline_layout == *layout
-                ? Result<GraphicsDrawDesc, resource::ResourceError>(
-                      Ok((*prepared_)->graphics.clone()))
-                : texture_output_recipe(shaders, *pipeline_, *render_pass_, *layout, format_, true);
-        if (recipe.is_err()) return Err(recipe.unwrap_err());
         auto source = resources->Prepared().Resolve(*source_).unwrap();
         Vec<resource_registry::DescriptorImageBinding> images;
         images.push({ .binding = 1,
@@ -192,38 +199,8 @@ public:
                                          resource_registry::DescriptorBindingReuse::Exclusive);
         if (descriptor.is_err()) return Err(descriptor.unwrap_err());
         resources_ = Some(resources.clone());
-        prepared_ =
-            Some(Arc<Prepared>::make(rstd::move(resources), descriptor.unwrap(), recipe.unwrap()));
+        prepared_  = Some(Arc<Prepared>::make(rstd::move(resources), descriptor.unwrap()));
         return Ok(empty {});
-    }
-    auto description(const PassInput& input, GraphSerial revision) const
-        -> Result<PassInput, GraphExecutionError> {
-        if (! graphics()) return Ok(input.clone());
-        if (! prepared_) return Err(GraphExecutionError { GraphExecutionStage::Prepare });
-        auto publish = [&]<typename T>(PassId id,
-                                       T      desc) -> Result<PassInput, GraphExecutionError> {
-            auto result = PassInput::publish(input.scope(), revision, id, rstd::move(desc));
-            if (result.is_err())
-                return Err(GraphExecutionError {
-                    GraphExecutionStage::Schema,
-                    id,
-                    {},
-                    vrento::vulkan::GraphExecutionCause::Graph(result.unwrap_err()) });
-            return Ok(result.unwrap());
-        };
-        auto id = input.execution().id;
-        if (auto release = input.get<SurfaceReleaseDesc>()) {
-            auto desc   = **release;
-            desc.stages = PassStages::Color;
-            return publish(id, rstd::move(desc));
-        }
-        auto transfer = input.get<SurfaceTransferDesc>();
-        if (! transfer) return Err(GraphExecutionError { GraphExecutionStage::Schema, id });
-        auto description = (*prepared_)->graphics.clone();
-        description.resources.textures.push({ (*transfer)->source.clone() });
-        description.resources.attachments.color = Some(GraphicsAttachment {
-            .target = (*transfer)->target.clone(), .load = AttachmentLoad::Discard });
-        return publish(id, rstd::move(description));
     }
     auto capture(const CompiledGraph& compiled, ResourceId logical_surface, PassId output,
                  PassId release, SurfaceTarget target, Arc<GraphicsScopeCache> scopes) const
@@ -258,7 +235,8 @@ public:
             auto found = compiled.description(id);
             if (! found) return invalid();
             const auto& desc = **found;
-            for (const auto& use : desc.execution().uses) {
+            auto        slot = compiled.description().frame_graph().pass_slot(id);
+            for (const auto& use : compiled.description().passes()[usize(slot)].uses) {
                 if (request.bindings.resolve(use.resource, use.version)) continue;
                 auto bound = request.bindings.bind_version({ use.resource, use.version },
                                                            use.resource == logical_surface

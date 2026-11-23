@@ -19,12 +19,13 @@ struct TypedPassFactory {
     auto    PassType() const -> rstd::any::TypeId {
         return rstd::any::TypeId::of<typename Backend::Pass>();
     }
-    auto Compile(const PassInput& desc, const PassCompileContext& context)
+    auto Compile(const PassInput& desc, const PassExecutionInfo& pass,
+                 const PassCompileContext& context)
         -> Result<vrento::vulkan::Preparation<Arc<dyn<VulkanPass>>>, GraphExecutionError> {
         auto value = desc.get<T>();
         if (! value)
             return Err(GraphExecutionError { GraphExecutionStage::Schema, desc.execution().id });
-        return backend.Compile(**value, desc.execution(), context);
+        return backend.Compile(**value, pass, context);
     }
 };
 
@@ -36,9 +37,10 @@ struct PassFactory {
         using Trait = PassFactory;
         auto Type() const -> rstd::any::TypeId { return rstd::trait_call<0>(this); }
         auto PassType() const -> rstd::any::TypeId { return rstd::trait_call<2>(this); }
-        auto Compile(const PassInput& desc, const PassCompileContext& context)
+        auto Compile(const PassInput& desc, const PassExecutionInfo& pass,
+                     const PassCompileContext& context)
             -> Result<vrento::vulkan::Preparation<Arc<dyn<VulkanPass>>>, GraphExecutionError> {
-            return rstd::trait_call<1>(this, desc, context);
+            return rstd::trait_call<1>(this, desc, pass, context);
         }
     };
     template<class T>
@@ -54,10 +56,11 @@ struct Impl<vrento::vulkan::PassFactory, vrento::vulkan::TypedPassFactory<T, Bac
     auto Type() const -> any::TypeId { return this->self().Type(); }
     auto PassType() const -> any::TypeId { return this->self().PassType(); }
     auto Compile(const vrento::vulkan::PassInput&          desc,
+                 const vrento::vulkan::PassExecutionInfo&  pass,
                  const vrento::vulkan::PassCompileContext& context)
         -> Result<vrento::vulkan::Preparation<sync::Arc<dyn<vrento::vulkan::VulkanPass>>>,
                   vrento::vulkan::GraphExecutionError> {
-        return this->self().Compile(desc, context);
+        return this->self().Compile(desc, pass, context);
     }
 };
 } // namespace rstd

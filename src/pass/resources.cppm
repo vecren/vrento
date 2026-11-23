@@ -51,86 +51,46 @@ struct BufferUse {
 struct TextureBinding {
     TextureUse        resource;
     fg::ResourceRange range;
-    ContentRef        content;
+    resource::TextureResourceRef definition;
 };
 struct BufferBinding {
     BufferUse         resource;
     fg::ResourceRange range;
-    ContentRef        content;
+    resource::BufferResourceRef definition;
 };
 struct GraphResourceMap {
     fg::Serial           scope {};
     Vec<TextureBinding>  textures;
     Vec<BufferBinding>   buffers;
-    Vec<fg::ResourceUse> externals;
+    Vec<fg::ResourceVersion> externals;
     auto                 same_bindings(const GraphResourceMap& other) const -> bool {
         if (scope != other.scope || textures.len() != other.textures.len() ||
             buffers.len() != other.buffers.len() || externals.len() != other.externals.len())
             return false;
-        auto same_content = [](const ContentRef& a, const ContentRef& b) {
-            if (a.version() != b.version()) return false;
-            auto at = a.texture(), bt = b.texture();
-            if (at.is_some() != bt.is_some()) return false;
-            if (at && (at->id() != bt->id() ||
-                       at->definition().definition != bt->definition().definition ||
-                       at->definition().kind != bt->definition().kind))
-                return false;
-            auto ab = a.buffer(), bb = b.buffer();
-            if (ab.is_some() != bb.is_some()) return false;
-            return ! ab || (ab->id() == bb->id() &&
-                            ab->definition().definition == bb->definition().definition);
-        };
         for (usize i {}; i < textures.len(); ++i) {
             const auto& a = textures[i];
             const auto& b = other.textures[i];
             if (a.resource.version != b.resource.version ||
                 a.resource.handle != b.resource.handle || a.range != b.range ||
-                ! same_content(a.content, b.content))
+                ! a.definition.valid() || ! b.definition.valid() ||
+                a.definition.id() != b.definition.id() ||
+                a.definition.definition().definition != b.definition.definition().definition ||
+                a.definition.definition().kind != b.definition.definition().kind)
                 return false;
         }
         for (usize i {}; i < buffers.len(); ++i) {
             const auto& a = buffers[i];
             const auto& b = other.buffers[i];
             if (a.resource.version != b.resource.version || a.resource.use != b.resource.use ||
-                a.range != b.range || ! same_content(a.content, b.content))
+                a.range != b.range || ! a.definition.valid() || ! b.definition.valid() ||
+                a.definition.id() != b.definition.id() ||
+                a.definition.definition().definition != b.definition.definition().definition)
                 return false;
         }
         for (usize i {}; i < externals.len(); ++i) {
-            const auto& a = externals[i];
-            const auto& b = other.externals[i];
-            if (a.version != b.version || a.range != b.range || a.access != b.access ||
-                a.requires_contents != b.requires_contents)
-                return false;
+            if (externals[i] != other.externals[i]) return false;
         }
         return true;
-    }
-    auto validate(const ContentRef& content) const -> Result<empty, fg::Error> {
-        auto version = content.resolve(scope);
-        if (version.is_err()) return Err(version.unwrap_err());
-        auto texture = content.texture();
-        auto buffer  = content.buffer();
-        bool found {};
-        for (const auto& binding : textures)
-            if (binding.resource.version == *version) {
-                auto definition = binding.content.texture();
-                if (buffer || ! definition || (texture && texture->id() != definition->id()) ||
-                    binding.content.version() != *version)
-                    return Err(fg::Error { fg::ErrorKind::Conflict, {}, version->resource });
-                found = true;
-            }
-        for (const auto& binding : buffers)
-            if (binding.resource.version == *version) {
-                auto definition = binding.content.buffer();
-                if (texture || ! definition || (buffer && buffer->id() != definition->id()) ||
-                    binding.content.version() != *version)
-                    return Err(fg::Error { fg::ErrorKind::Conflict, {}, version->resource });
-                found = true;
-            }
-        for (const auto& binding : externals)
-            if (binding.version == *version && ! texture && ! buffer) found = true;
-        if (! found)
-            return Err(fg::Error { fg::ErrorKind::MissingResource, {}, version->resource });
-        return Ok(empty {});
     }
 };
 class GraphResources {
@@ -138,6 +98,9 @@ class GraphResources {
     Vec<GraphTexture> textures_;
     Vec<TextureUse>   uses_;
     Vec<BufferUse>    buffers_;
+    HashMap<fg::ResourceId, usize>            textures_by_id_, buffers_by_id_;
+    HashMap<fg::ResourceVersion, usize>       uses_by_version_;
+    HashMap<resource::BufferUseHandle, usize> buffers_by_use_;
 
 public:
     explicit GraphResources(u64 generation): generation_(generation) {}
@@ -193,17 +156,12 @@ public:
         -> Result<empty, fg::Error> {
         if (graph.data().scope != generation_.to_primitive())
             return Err(fg::Error { fg::ErrorKind::Conflict });
-        fg::Serial next { 1 };
-        for (const auto& resource : graph.data().resources)
-            next = rstd::cmp::max(next, resource.id.value + 1);
         for (const auto& entry : entries) {
             if (! entry.definition.valid())
                 return Err(fg::Error { fg::ErrorKind::MissingResource });
-            bool exists {};
-            for (const auto& buffer : buffers_) exists |= buffer.use == entry.handle;
-            if (exists || entry.handle.generation != generation_)
+            if (buffers_by_use_.get(entry.handle) || entry.handle.generation != generation_)
                 return Err(fg::Error { fg::ErrorKind::Conflict });
-            fg::ResourceId id { next++, graph.data().scope };
+            auto           id = graph.next_resource_id();
             auto           declared =
                 graph.import_resource({ .id      = id,
                                         .kind    = fg::ResourceKind::Buffer,
@@ -212,22 +170,22 @@ public:
                                         .storage = id.value,
                                         .name    = entry.request().name.clone() });
             if (declared.is_err()) return Err(declared.unwrap_err());
+            (void)buffers_by_id_.insert(id, buffers_.len());
+            (void)buffers_by_use_.insert(entry.handle, buffers_.len());
             buffers_.push({ entry.handle, declared.unwrap() });
         }
         return Ok(empty {});
     }
     auto version(resource::BufferUseHandle handle) const -> Option<fg::ResourceVersion> {
-        for (const auto& buffer : buffers_)
-            if (buffer.use == handle) return Some(fg::ResourceVersion(buffer.version));
-        return None();
+        auto index = buffers_by_use_.get(handle);
+        return index ? Some(fg::ResourceVersion(buffers_[**index].version)) : None();
     }
     auto generation() const -> u64 { return generation_; }
     auto textures() const -> slice<GraphTexture> { return textures_.as_slice(); }
     auto uses() const -> slice<TextureUse> { return uses_.as_slice(); }
     auto find(fg::ResourceId id) const -> const GraphTexture* {
-        for (const auto& entry : textures_)
-            if (entry.id == id) return rstd::addressof(entry);
-        return nullptr;
+        auto index = textures_by_id_.get(id);
+        return index ? rstd::addressof(textures_[**index]) : nullptr;
     }
     auto find(ref<str> name) const -> const GraphTexture* {
         for (const auto& entry : textures_)
@@ -242,28 +200,16 @@ public:
     auto handle(fg::ResourceVersion version) -> Result<resource::TextureUseHandle, fg::Error> {
         if (! find(version.resource))
             return Err(fg::Error { fg::ErrorKind::MissingResource, {}, version.resource });
-        for (const auto& use : uses_)
-            if (use.version == version) return Ok(use.handle);
+        if (auto index = uses_by_version_.get(version)) return Ok(uses_[**index].handle);
         resource::TextureUseHandle result { rstd::as_cast<u64>(uses_.len()), generation_ };
+        (void)uses_by_version_.insert(version, uses_.len());
         uses_.push({ version, result });
         return Ok(result);
     }
     auto version(resource::TextureUseHandle handle) const -> Option<fg::ResourceVersion> {
         if (handle.generation != generation_) return None();
-        for (const auto& use : uses_)
-            if (use.handle == handle) return Some(fg::ResourceVersion(use.version));
-        return None();
-    }
-    auto resourceUses(const fg::PassNode& pass) const -> Vec<resource::TextureUseHandle> {
-        Vec<resource::TextureUseHandle> result;
-        for (const auto& use : uses_) {
-            for (const auto& access : pass.uses)
-                if (access.version == use.version) {
-                    result.push(resource::TextureUseHandle(use.handle));
-                    break;
-                }
-        }
-        return result;
+        if (handle.index >= rstd::as_cast<u64>(uses_.len())) return None();
+        return Some(fg::ResourceVersion(uses_[usize(handle.index.to_primitive())].version));
     }
     auto declare(fg::FrameGraphBuilder& graph, TextureSpec spec)
         -> Result<fg::ResourceVersion, fg::Error> {
@@ -282,10 +228,7 @@ public:
                 return Err(fg::Error { fg::ErrorKind::Conflict, {}, existing.id });
             return Ok(fg::ResourceVersion { existing.id, 0 });
         }
-        fg::Serial next { 1 };
-        for (const auto& resource : graph.data().resources)
-            next = rstd::cmp::max(next, resource.id.value + 1);
-        fg::ResourceId id { next, generation_.to_primitive() };
+        auto           id = graph.next_resource_id();
         fg::Serial     allocation_class {};
         if (spec.allocation_family &&
             spec.request().lifetime == resource::TextureLifetimeClass::FrameLocal) {
@@ -328,108 +271,85 @@ public:
         auto declared = spec.imported ? graph.import_resource(rstd::move(description))
                                       : graph.create_resource(rstd::move(description));
         if (declared.is_err()) return declared;
+        (void)textures_by_id_.insert(id, textures_.len());
         textures_.push({ id, rstd::move(spec) });
         return declared;
     }
     auto bindings(const fg::FrameGraph& graph, const resource::ResourcePlan& plan) const
         -> Result<GraphResourceMap, fg::Error> {
         if (plan.generation != generation_) return Err(fg::Error { fg::ErrorKind::Conflict });
-        auto valid = validate(graph);
-        if (valid.is_err()) return Err(valid.unwrap_err());
-        GraphResourceMap result { .scope = graph.scope() };
-        for (const auto& pass : graph.passes())
-            for (const auto& access : pass.uses) {
-                bool found {};
-                for (const auto& texture : uses_)
-                    if (texture.version == access.version) {
-                        for (const auto& entry : plan.textures)
-                            if (entry.handle == texture.handle) {
-                                auto content = ContentRef::bind(
-                                    graph, access.version, Some(entry.definition.clone()));
-                                if (content.is_err()) return Err(content.unwrap_err());
-                                result.textures.push({ texture, access.range, content.unwrap() });
-                                found = true;
-                            }
-                        if (! found)
-                            return Err(fg::Error {
-                                fg::ErrorKind::MissingResource, pass.id, access.version.resource });
-                    }
-                for (const auto& buffer : buffers_)
-                    if (buffer.version.resource == access.version.resource) {
-                        for (const auto& entry : plan.buffers)
-                            if (entry.handle == buffer.use) {
-                                auto content = ContentRef::bind(
-                                    graph, access.version, None(), Some(entry.definition.clone()));
-                                if (content.is_err()) return Err(content.unwrap_err());
-                                result.buffers.push({ { buffer.use, access.version },
-                                                      access.range,
-                                                      content.unwrap() });
-                                found = true;
-                            }
-                        if (! found)
-                            return Err(fg::Error {
-                                fg::ErrorKind::MissingResource, pass.id, access.version.resource });
-                    }
-                if (! found) {
-                    auto resource = graph.find_resource(access.version.resource);
-                    if (! resource || ! resource->imported)
-                        return Err(fg::Error {
-                            fg::ErrorKind::MissingResource, pass.id, access.version.resource });
-                    result.externals.push(fg::ResourceUse(access));
-                }
-            }
-        return Ok(rstd::move(result));
-    }
-    auto validate(const fg::FrameGraph& graph) const -> Result<empty, fg::Error> {
         if (graph.scope() != generation_.to_primitive())
             return Err(fg::Error { fg::ErrorKind::Conflict });
-        for (const auto& use : uses_) {
-            const auto* texture = find(use.version.resource);
-            if (! texture || ! texture->spec.definition.valid() ||
-                ! graph.find_version(use.version) || ! graph.find_resource(use.version.resource))
-                return Err(fg::Error { fg::ErrorKind::MissingResource, {}, use.version.resource });
+        HashMap<resource::TextureUseHandle, usize> texture_entries;
+        HashMap<resource::BufferUseHandle, usize>  buffer_entries;
+        for (usize i {}; i < plan.textures.len(); ++i)
+            if (texture_entries.insert(plan.textures[i].handle, i))
+                return Err(fg::Error { fg::ErrorKind::Duplicate });
+        for (usize i {}; i < plan.buffers.len(); ++i)
+            if (buffer_entries.insert(plan.buffers[i].handle, i))
+                return Err(fg::Error { fg::ErrorKind::Duplicate });
+        GraphResourceMap result { .scope = graph.scope() };
+        const auto&      indexed = graph.inspect();
+        for (usize i {}; i < indexed.accesses.len(); ++i) {
+            const auto& access = indexed.accesses[i];
+            if (! access.used()) continue;
+            const auto& life    = indexed.lifetimes[i];
+            auto        version = life.version;
+            auto        missing = [&] {
+                auto pass = graph.passes()[usize(*life.uses.first().unwrap())].id;
+                return Err(fg::Error { fg::ErrorKind::MissingResource, pass, version.resource });
+            };
+            if (auto index = uses_by_version_.get(version)) {
+                const auto& texture = uses_[**index];
+                auto        entry   = texture_entries.get(texture.handle);
+                if (! entry || ! plan.textures[**entry].definition.valid()) return missing();
+                result.textures.push(
+                    { texture, access.bounds, plan.textures[**entry].definition.clone() });
+            } else if (auto index = buffers_by_id_.get(version.resource)) {
+                auto use   = buffers_[**index].use;
+                auto entry = buffer_entries.get(use);
+                if (! entry || ! plan.buffers[**entry].definition.valid()) return missing();
+                result.buffers.push(
+                    { { use, version }, access.bounds, plan.buffers[**entry].definition.clone() });
+            } else {
+                auto resource = graph.find_resource(version.resource);
+                if (! resource || ! resource->imported) return missing();
+                result.externals.push(fg::ResourceVersion(version));
+            }
         }
-        return Ok(empty {});
+        return Ok(rstd::move(result));
     }
     auto resourcePlan(const fg::FrameGraph& graph) const
         -> Result<resource::ResourcePlan, fg::Error> {
-        auto valid = validate(graph);
-        if (valid.is_err()) return Err(valid.unwrap_err());
+        if (graph.scope() != generation_.to_primitive())
+            return Err(fg::Error { fg::ErrorKind::Conflict });
         resource::ResourcePlan result { .generation = generation_ };
         for (const auto& use : uses_) {
             const auto* texture  = find(use.version.resource);
             const auto* version  = graph.find_version(use.version);
             const auto* resource = graph.find_resource(use.version.resource);
+            if (! texture || ! texture->spec.definition.valid() || ! version || ! resource)
+                return Err(fg::Error { fg::ErrorKind::MissingResource, {}, use.version.resource });
             const auto& request  = texture->spec.request();
             const bool  preserve = resource->imported && ! texture->spec.imported;
-            bool        initialize {};
-            if (preserve && texture->spec.initialize_history_transparent &&
+            const bool  initialize =
+                preserve && texture->spec.initialize_history_transparent &&
                 request.kind == resource::TextureRequestKind::RenderTarget && request.definition &&
                 ! resource::HasTextureUsage(request.definition->usage,
-                                            resource::TextureUsage::DepthAttachment)) {
-                bool reads_initial {}, writes_current {};
-                for (const auto& pass : graph.passes())
-                    for (const auto& access : pass.uses)
-                        if (access.version.resource == texture->id) {
-                            reads_initial |=
-                                access.version.version == 0 && access.access == fg::Access::Read;
-                            writes_current |= access.access == fg::Access::Write;
-                        }
-                initialize = reads_initial && writes_current;
-            }
+                                            resource::TextureUsage::DepthAttachment) &&
+                graph.version_access({ texture->id, 0 }).read &&
+                graph.has_resource_writes(texture->id);
             String key;
             if (! preserve && texture->spec.allocation_family &&
-                request.lifetime == resource::TextureLifetimeClass::FrameLocal)
-                for (auto allocation : graph.inspect().allocations)
-                    if (allocation.version == use.version)
-                        key = rstd::format("{}::{}::slot_{}",
-                                           generation_,
-                                           texture->spec.allocation_family->as_str(),
-                                           allocation.slot);
-            bool read {};
-            for (const auto& pass : graph.passes())
-                for (const auto& access : pass.uses)
-                    read |= access.version == use.version && access.access == fg::Access::Read;
+                request.lifetime == resource::TextureLifetimeClass::FrameLocal) {
+                auto slot = graph.allocation_slot(use.version);
+                if (slot != fg::invalid_index)
+                    key = rstd::format("{}::{}::slot_{}",
+                                       generation_,
+                                       texture->spec.allocation_family->as_str(),
+                                       slot);
+            }
+            bool read = graph.version_access(use.version).read;
             result.textures.push({ .handle         = use.handle,
                                    .definition     = texture->spec.definition.clone(),
                                    .allocation_key = rstd::move(key),

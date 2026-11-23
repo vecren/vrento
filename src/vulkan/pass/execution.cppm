@@ -194,9 +194,9 @@ inline auto validate_use(const GraphBindingRequirement& resource, const PassReso
     return Ok(empty {});
 }
 
-inline auto
-validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequirement> resources,
-                        GraphLimits limits = {}, slice<fg::AllocationSlot> allocations = {})
+template<typename ResourceAt, typename SlotAt>
+inline auto check_pass_execution(const PassExecutionInfo& pass, GraphLimits limits,
+                                 ResourceAt resource_at, SlotAt slot_at)
     -> Result<empty, GraphError> {
     if (! pass.id.valid() || ! pass.kind || ! pass.schema_version ||
         GraphIndex(pass.queue.capability) > GraphIndex(QueueClass::Transfer))
@@ -205,10 +205,8 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
         pass.parameters.len().to_primitive() > limits.parameter_bytes)
         return Err(GraphError { GraphErrorKind::Limit, pass.id });
     for (usize u {}; u < pass.uses.len(); ++u) {
-        const auto&                    use   = pass.uses[u];
-        const GraphBindingRequirement* found = nullptr;
-        for (const auto& resource : resources)
-            if (resource.id == use.resource) found = rstd::addressof(resource);
+        const auto& use   = pass.uses[u];
+        auto        found = resource_at(use.resource);
         if (! found)
             return Err(GraphError { GraphErrorKind::MissingResource, pass.id, use.resource });
         auto checked = validate_use(*found, use, pass.queue);
@@ -224,15 +222,11 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
                 (previous.access == GraphAccess::Read && use.access == GraphAccess::Read))
                 continue;
             if (previous.version != use.version) {
-                Option<fg::Index> previous_slot, current_slot;
-                for (const auto& allocation : allocations) {
-                    if (allocation.version ==
-                        fg::ResourceVersion { previous.resource, previous.version })
-                        previous_slot = Some(fg::Index(allocation.slot));
-                    if (allocation.version == fg::ResourceVersion { use.resource, use.version })
-                        current_slot = Some(fg::Index(allocation.slot));
-                }
-                if (previous_slot && current_slot && *previous_slot != *current_slot) continue;
+                auto previous_slot = slot_at({ previous.resource, previous.version });
+                auto current_slot  = slot_at({ use.resource, use.version });
+                if (previous_slot != fg::invalid_index && current_slot != fg::invalid_index &&
+                    previous_slot != current_slot)
+                    continue;
             }
             if (previous.access != use.access && previous.usage == use.usage &&
                 (use.usage == PassUsage::Storage || use.usage == PassUsage::ColorAttachment ||
@@ -290,6 +284,25 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
 
     return Ok(empty {});
 }
+
+inline auto
+validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequirement> resources,
+                        GraphLimits limits = {}, slice<fg::AllocationSlot> allocations = {})
+    -> Result<empty, GraphError> {
+    return check_pass_execution(
+        pass,
+        limits,
+        [&](ResourceId id) -> const GraphBindingRequirement* {
+            for (const auto& resource : resources)
+                if (resource.id == id) return rstd::addressof(resource);
+            return nullptr;
+        },
+        [&](fg::ResourceVersion id) -> fg::Index {
+            for (auto allocation : allocations)
+                if (allocation.version == id) return allocation.slot;
+            return fg::invalid_index;
+        });
+}
 class GraphBindingLayout {
     HashMap<ResourceId, usize>              resources_;
     HashMap<fg::ResourceVersion, fg::Index> versions_;
@@ -345,10 +358,10 @@ public:
     static auto associate(fg::FrameGraph graph, Vec<PassExecutionInfo> passes,
                           GraphLimits limits = {}, slice<GraphBindingRequirement> requirements = {})
         -> Result<VulkanPassSet, GraphError> {
-        auto plan = graph.compile({ .resources    = limits.resources,
-                                    .passes       = limits.passes,
-                                    .uses         = limits.uses,
-                                    .dependencies = limits.dependencies });
+        auto plan = graph.check_limits({ .resources    = limits.resources,
+                                         .passes       = limits.passes,
+                                         .uses         = limits.uses,
+                                         .dependencies = limits.dependencies });
         if (plan.is_err()) return Err(plan.unwrap_err());
         VulkanPassData data { .scope = graph.scope() };
         for (const auto& resource : graph.resources())
@@ -360,12 +373,9 @@ public:
                                   .aspects       = resource.aspects,
                                   .imported      = resource.imported,
                                   .fixed_storage = resource.storage != 0 });
-        for (auto& resource : data.resources) {
-            resource.read_only_import = resource.imported;
-            for (const auto& version : graph.versions())
-                if (version.id.resource == resource.id && version.writer)
-                    resource.read_only_import = false;
-        }
+        for (auto& resource : data.resources)
+            resource.read_only_import =
+                resource.imported && ! graph.has_resource_writes(resource.id);
         if (! requirements.is_empty()) {
             if (requirements.len() != data.resources.len())
                 return Err(GraphError { GraphErrorKind::Conflict });
@@ -391,34 +401,37 @@ public:
         }
         if (passes.len() != graph.passes().len())
             return Err(GraphError { GraphErrorKind::MissingPass });
-        for (const auto& node : graph.passes()) {
-            Option<usize> found;
-            for (usize i {}; i < passes.len(); ++i)
-                if (passes[i].id == node.id) {
-                    if (found) return Err(GraphError { GraphErrorKind::Duplicate, node.id });
-                    found = Some(i);
-                }
-            if (! found) return Err(GraphError { GraphErrorKind::MissingPass, node.id });
-            auto pass = rstd::move(passes[*found]);
+        Vec<fg::Index> pass_inputs;
+        pass_inputs.resize(passes.len(), fg::invalid_index);
+        for (usize i {}; i < passes.len(); ++i) {
+            auto id   = passes[i].id;
+            auto slot = graph.pass_slot(id);
+            if (slot == fg::invalid_index)
+                return Err(GraphError { GraphErrorKind::MissingPass, id });
+            auto& input = pass_inputs[usize(slot)];
+            if (input != fg::invalid_index)
+                return Err(GraphError { GraphErrorKind::Duplicate, id });
+            input = fg::Index(i.to_primitive());
+        }
+        HashMap<u32, LogicalQueue> queues;
+        for (usize slot {}; slot < graph.passes().len(); ++slot) {
+            const auto& node = graph.passes()[slot];
+            auto        pass = rstd::move(passes[usize(pass_inputs[slot])]);
             if (pass.queue.id != node.queue.value || pass.uses.len() != node.uses.len())
                 return Err(GraphError { GraphErrorKind::Conflict, node.id });
-            Vec<bool> matched;
-            matched.resize(node.uses.len(), false);
-            for (auto& use : pass.uses) {
-                Option<usize> declared;
-                for (usize i {}; i < node.uses.len(); ++i) {
-                    const auto& expected = node.uses[i];
-                    if (! matched[i] && (! use.logical_use || expected.id == use.logical_use) &&
-                        expected.version == fg::ResourceVersion { use.resource, use.version } &&
-                        expected.access == use.access && expected.range == use.range) {
-                        declared = Some(i);
-                        break;
-                    }
-                }
-                if (! declared)
+            for (usize i {}; i < pass.uses.len(); ++i) {
+                auto&       use      = pass.uses[i];
+                const auto& declared = node.uses[i];
+                if (use.logical_use
+                        ? use.logical_use != declared.id
+                        : (declared.version != fg::ResourceVersion { use.resource, use.version } ||
+                           declared.access != use.access || declared.range != use.range))
                     return Err(GraphError { GraphErrorKind::Conflict, node.id, use.resource });
-                matched[*declared] = true;
-                use.logical_use    = node.uses[*declared].id;
+                use.logical_use = declared.id;
+                use.resource    = declared.version.resource;
+                use.version     = declared.version.version;
+                use.access      = declared.access;
+                use.range       = declared.range;
                 if (use.access == GraphAccess::Write && pass.graphics) {
                     const Option<GraphAttachment>* attachments[] { &pass.graphics->color,
                                                                    &pass.graphics->depth,
@@ -434,12 +447,25 @@ public:
                         }
                 }
             }
-            auto valid = validate_pass_execution(
-                pass, data.resources.as_slice(), limits, plan->allocations.as_slice());
+            auto valid = check_pass_execution(
+                pass,
+                limits,
+                [&](ResourceId id) -> const GraphBindingRequirement* {
+                    auto index = graph.resource_slot(id);
+                    return index == fg::invalid_index
+                               ? nullptr
+                               : rstd::addressof(data.resources[usize(index)]);
+                },
+                [&](fg::ResourceVersion id) {
+                    return graph.allocation_slot(id);
+                });
             if (valid.is_err()) return Err(valid.unwrap_err());
-            for (const auto& previous : data.passes)
-                if (previous.queue.id == pass.queue.id && previous.queue != pass.queue)
+            auto queue = u32(pass.queue.id);
+            if (auto previous = queues.get(queue)) {
+                if (**previous != pass.queue)
                     return Err(GraphError { GraphErrorKind::Conflict, node.id });
+            } else
+                (void)queues.insert(queue, LogicalQueue(pass.queue));
             data.passes.push(rstd::move(pass));
         }
         data.dependencies = Vec<GraphDependency>::from(graph.dependencies());

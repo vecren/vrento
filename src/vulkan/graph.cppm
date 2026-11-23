@@ -896,7 +896,7 @@ class PreparedGraphProgram {
     struct Data {
         DeviceSession                                            session;
         VulkanPassSet                                            graph;
-        GraphExecutionPlan                                       plan;
+        const GraphExecutionPlan&                                plan;
         Option<rstd::sync::Arc<Vec<usize>>>                      routes;
         GraphBindings                                            bindings;
         Vec<rstd::sync::Arc<dyn<VulkanPass>>>                    passes;
@@ -907,11 +907,10 @@ class PreparedGraphProgram {
         usize                                                    group_end {};
         Option<rstd::sync::Arc<dyn<PreparedGraphicsScope>>>      group_scope;
         Option<graph_texture::SubmissionReceipt>                 receipt;
-        Data(DeviceSession device, VulkanPassSet description, GraphExecutionPlan schedule,
-             GraphBindings resources)
+        Data(DeviceSession device, VulkanPassSet description, GraphBindings resources)
             : session(rstd::move(device)),
               graph(rstd::move(description)),
-              plan(rstd::move(schedule)),
+              plan(graph.frame_graph().inspect()),
               bindings(rstd::move(resources)) {}
     };
     rstd::sync::Arc<Data> data_;
@@ -925,18 +924,10 @@ public:
                               const GraphBindings& bindings, bool merge_scopes = true,
                               graph_texture::Submission* work = nullptr)
         -> Result<PreparedGraphProgram, GraphExecutionError> {
-        auto plan = graph.compile();
-        if (plan.is_err())
-            return Err(GraphExecutionError {
-                GraphExecutionStage::Graph,
-                {},
-                {},
-                vrento::vulkan::GraphExecutionCause::Graph(plan.unwrap_err()) });
         auto frozen = bindings.prepare(graph, session, work);
         if (frozen.is_err()) return Err(frozen.unwrap_err());
         auto data = rstd::sync::Arc<Data>::make(rstd::move(session),
                                                 rstd::move(graph),
-                                                rstd::move(plan).unwrap(),
                                                 rstd::move(frozen).unwrap());
         if (work) data->receipt = Some(work->receipt());
         data->merge_scopes = merge_scopes;

@@ -11,17 +11,91 @@ export namespace vrento::fg
 struct AnalysisStatistics {
     Serial attempts {}, failures {};
 };
+namespace frame_graph_detail
+{
+struct Lookup {
+    HashMap<u64, Index>             resources;
+    HashMap<PassId, Index>          passes;
+    HashMap<ResourceVersion, Index> versions;
+    Vec<Index>                      latest, output_ordinals, output_counts;
+    Serial                          largest_resource {}, largest_pass {};
+
+    auto resource(const FrameGraphData& data, ResourceId id) const -> Index {
+        if (id.value && id.value <= data.resources.len().to_primitive() &&
+            data.resources[usize(id.value - 1)].id == id)
+            return Index(id.value - 1);
+        auto found = resources.get(u64(id.value));
+        return found && data.resources[usize(**found)].id == id ? **found : invalid_index;
+    }
+    auto pass(const FrameGraphData& data, PassId id) const -> Index {
+        if (id.value && id.value <= data.passes.len().to_primitive() &&
+            data.passes[usize(id.value - 1)].id == id)
+            return Index(id.value - 1);
+        auto found = passes.get(id);
+        return found ? **found : invalid_index;
+    }
+    auto version(ResourceVersion id) const -> Index {
+        auto found = versions.get(id);
+        return found ? **found : invalid_index;
+    }
+    void add_resource(ResourceId id, Index index) {
+        (void)resources.insert(u64(id.value), Index(index));
+        latest.push(Index {});
+        largest_resource = rstd::cmp::max(largest_resource, id.value);
+    }
+    void add_pass(PassId id, Index index) {
+        (void)passes.insert(id, Index(index));
+        output_counts.push(Index {});
+        largest_pass = rstd::cmp::max(largest_pass, id.value);
+    }
+    void add_version(const FrameGraphData& data, const VersionNode& node, Index index) {
+        (void)versions.insert(node.id, Index(index));
+        auto r = resource(data, node.id.resource);
+        if (r != invalid_index)
+            latest[usize(r)] = rstd::cmp::max(latest[usize(r)], node.id.version);
+        auto writer = node.writer ? pass(data, *node.writer) : invalid_index;
+        output_ordinals.push(writer == invalid_index ? invalid_index
+                                                     : output_counts[usize(writer)]++);
+    }
+    static auto build(const FrameGraphData& data) -> Lookup {
+        Lookup result;
+        for (Index i {}; i < data.resources.len().to_primitive(); ++i)
+            result.add_resource(data.resources[usize(i)].id, i);
+        for (Index i {}; i < data.passes.len().to_primitive(); ++i)
+            result.add_pass(data.passes[usize(i)].id, i);
+        for (Index i {}; i < data.versions.len().to_primitive(); ++i)
+            result.add_version(data, data.versions[usize(i)], i);
+        return result;
+    }
+};
+} // namespace frame_graph_detail
+
 class FrameGraph {
+    friend class FrameGraphBuilder;
+    using Lookup = frame_graph_detail::Lookup;
     struct Data {
         FrameGraphData graph;
         FrameGraphPlan plan;
-        Data(FrameGraphData input, FrameGraphPlan compiled)
-            : graph(rstd::move(input)), plan(rstd::move(compiled)) {}
+        Lookup         lookup;
+        Data(FrameGraphData input, FrameGraphPlan compiled, Lookup indexes)
+            : graph(rstd::move(input)), plan(rstd::move(compiled)), lookup(rstd::move(indexes)) {}
     };
     rstd::sync::Arc<Data> data_;
-    explicit FrameGraph(FrameGraphData graph, FrameGraphPlan plan)
-        : data_(rstd::sync::Arc<Data>::make(rstd::move(graph), rstd::move(plan))) {}
-    static auto analyze(const FrameGraphData& data, Limits limits) -> Result<FrameGraphPlan, Error>;
+    explicit FrameGraph(FrameGraphData graph, FrameGraphPlan plan, Lookup lookup)
+        : data_(rstd::sync::Arc<Data>::make(rstd::move(graph), rstd::move(plan),
+                                            rstd::move(lookup))) {}
+    static auto analyze(const FrameGraphData& data, const Lookup& lookup, Limits limits,
+                        bool authored) -> Result<FrameGraphPlan, Error>;
+    static auto finish(FrameGraphData data, Lookup lookup, Limits limits, bool authored,
+                       AnalysisStatistics* statistics) -> Result<FrameGraph, Error> {
+        if (statistics) ++statistics->attempts;
+        auto plan = analyze(data, lookup, limits, authored);
+        if (plan.is_err()) {
+            if (statistics) ++statistics->failures;
+            return Err(plan.unwrap_err());
+        }
+        return Ok(FrameGraph(rstd::move(data), plan.unwrap(), rstd::move(lookup)));
+    }
 
 public:
     FrameGraph(const FrameGraph& other): data_(other.data_.clone()) {}
@@ -33,28 +107,40 @@ public:
     auto        operator=(FrameGraph&&) -> FrameGraph& = default;
     static auto create(FrameGraphData data, Limits limits = {},
                        AnalysisStatistics* statistics = nullptr) -> Result<FrameGraph, Error> {
-        if (statistics) ++statistics->attempts;
-        auto plan = analyze(data, limits);
-        if (plan.is_err()) {
-            if (statistics) ++statistics->failures;
-            return Err(plan.unwrap_err());
-        }
-        return Ok(FrameGraph(rstd::move(data), plan.unwrap()));
+        auto lookup = Lookup::build(data);
+        return finish(rstd::move(data), rstd::move(lookup), limits, false, statistics);
     }
     auto find_resource(ResourceId id) const -> const ResourceDescription* {
-        for (const auto& value : resources())
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = data_->lookup.resource(data_->graph, id);
+        return i == invalid_index ? nullptr : rstd::addressof(resources()[usize(i)]);
     }
     auto find_version(ResourceVersion id) const -> const VersionNode* {
-        for (const auto& value : versions())
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = data_->lookup.version(id);
+        return i == invalid_index ? nullptr : rstd::addressof(versions()[usize(i)]);
     }
     auto find_pass(PassId id) const -> const PassNode* {
-        for (const auto& value : passes())
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = data_->lookup.pass(data_->graph, id);
+        return i == invalid_index ? nullptr : rstd::addressof(passes()[usize(i)]);
+    }
+    auto output_ordinal(ResourceVersion id) const -> Index {
+        auto i = data_->lookup.version(id);
+        return i == invalid_index ? invalid_index : data_->lookup.output_ordinals[usize(i)];
+    }
+    auto version_access(ResourceVersion id) const -> VersionAccess {
+        auto i = data_->lookup.version(id);
+        return i == invalid_index ? VersionAccess {} : data_->plan.accesses[usize(i)];
+    }
+    auto allocation_slot(ResourceVersion id) const -> Index {
+        auto i = data_->lookup.version(id);
+        return i == invalid_index ? invalid_index : data_->plan.allocations[usize(i)].slot;
+    }
+    bool has_resource_writes(ResourceId id) const {
+        auto i = data_->lookup.resource(data_->graph, id);
+        return i != invalid_index && data_->plan.resource_written[usize(i)];
+    }
+    auto pass_slot(PassId id) const -> Index { return data_->lookup.pass(data_->graph, id); }
+    auto resource_slot(ResourceId id) const -> Index {
+        return data_->lookup.resource(data_->graph, id);
     }
     auto scope() const -> Serial { return data_->graph.scope; }
     auto resources() const -> slice<ResourceDescription> {
@@ -66,75 +152,82 @@ public:
     auto exports() const -> slice<ResourceVersion> { return data_->graph.exports.as_slice(); }
     auto inspect() const -> const FrameGraphPlan& { return data_->plan; }
     auto clone_data() const -> FrameGraphData { return data_->graph.clone(); }
-    auto compile(Limits limits = {}) const -> Result<FrameGraphPlan, Error> {
+    auto check_limits(Limits limits = {}) const -> Result<empty, Error> {
         if (resources().len().to_primitive() > limits.resources ||
             versions().len().to_primitive() > limits.versions ||
-            passes().len().to_primitive() > limits.passes)
+            passes().len().to_primitive() > limits.passes || data_->plan.use_count > limits.uses ||
+            data_->plan.name_bytes > limits.name_bytes ||
+            data_->plan.dependencies.len().to_primitive() > limits.dependencies)
             return Err(Error { ErrorKind::Limit });
-        Serial uses {}, edges {}, names {};
-        for (const auto& pass : passes()) {
-            uses += pass.uses.len().to_primitive();
-            names += pass.name.len().to_primitive();
-        }
-        for (const auto& resource : resources()) names += resource.name.len().to_primitive();
-        for (const auto& next : data_->plan.successors) edges += next.len().to_primitive();
-        if (uses > limits.uses || edges > limits.dependencies || names > limits.name_bytes)
-            return Err(Error { ErrorKind::Limit });
+        return Ok(empty {});
+    }
+    auto compile(Limits limits = {}) const -> Result<FrameGraphPlan, Error> {
+        auto result = check_limits(limits);
+        if (result.is_err()) return Err(result.unwrap_err());
         return Ok(data_->plan.clone());
     }
 };
 
 class FrameGraphBuilder {
     FrameGraphData data_;
+    frame_graph_detail::Lookup lookup_;
+    HashSet<u64>               edges_;
+    HashSet<ResourceVersion>   exports_;
     Serial         next_use_ { 1 };
-    auto           resource_index(ResourceId id) const -> Index {
-        for (Index i {}; i < data_.resources.len().to_primitive(); ++i)
-            if (data_.resources[usize(i)].id == id) return i;
-        return invalid_index;
-    }
-    auto pass_index(PassId id) const -> Index {
-        for (Index i {}; i < data_.passes.len().to_primitive(); ++i)
-            if (data_.passes[usize(i)].id == id) return i;
-        return invalid_index;
-    }
-    auto version_index(ResourceVersion id) const -> Index {
-        for (Index i {}; i < data_.versions.len().to_primitive(); ++i)
-            if (data_.versions[usize(i)].id == id) return i;
-        return invalid_index;
+    bool                       authored_ { true };
+    auto resource_index(ResourceId id) const -> Index { return lookup_.resource(data_, id); }
+    auto pass_index(PassId id) const -> Index { return lookup_.pass(data_, id); }
+    auto version_index(ResourceVersion id) const -> Index { return lookup_.version(id); }
+    void append_version(VersionNode node) {
+        lookup_.add_version(data_, node, Index(data_.versions.len().to_primitive()));
+        data_.versions.push(rstd::move(node));
     }
     auto declare_resource(ResourceDescription desc, bool imported)
         -> Result<ResourceVersion, Error> {
         if (! desc.id.valid()) return Err(Error { ErrorKind::Invalid, {}, desc.id });
-        for (const auto& existing : data_.resources)
-            if (existing.id.value == desc.id.value)
-                return Err(Error { ErrorKind::Duplicate, {}, desc.id });
+        if (lookup_.resources.get(u64(desc.id.value)))
+            return Err(Error { ErrorKind::Duplicate, {}, desc.id });
         desc.imported = imported;
         ResourceVersion first { desc.id, 0 };
+        lookup_.add_resource(desc.id, Index(data_.resources.len().to_primitive()));
         data_.resources.push(rstd::move(desc));
-        data_.versions.push({ .id = first, .available = imported });
+        append_version({ .id = first, .available = imported });
         return Ok(first);
     }
 
 public:
     auto find_resource(ResourceId id) const -> const ResourceDescription* {
-        for (const auto& value : data_.resources)
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = resource_index(id);
+        return i == invalid_index ? nullptr : rstd::addressof(data_.resources[usize(i)]);
     }
     auto find_version(ResourceVersion id) const -> const VersionNode* {
-        for (const auto& value : data_.versions)
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = version_index(id);
+        return i == invalid_index ? nullptr : rstd::addressof(data_.versions[usize(i)]);
     }
     auto find_pass(PassId id) const -> const PassNode* {
-        for (const auto& value : data_.passes)
-            if (value.id == id) return rstd::addressof(value);
-        return nullptr;
+        auto i = pass_index(id);
+        return i == invalid_index ? nullptr : rstd::addressof(data_.passes[usize(i)]);
     }
+    auto output_ordinal(ResourceVersion id) const -> Index {
+        auto i = version_index(id);
+        return i == invalid_index ? invalid_index : lookup_.output_ordinals[usize(i)];
+    }
+    auto next_resource_id() const -> ResourceId {
+        return { lookup_.largest_resource + 1, data_.scope };
+    }
+    auto reserve_pass_id() -> PassId { return { ++lookup_.largest_pass }; }
     explicit FrameGraphBuilder(Serial scope): data_ { .scope = scope } {}
-    explicit FrameGraphBuilder(FrameGraphData data): data_(rstd::move(data)) {
+    explicit FrameGraphBuilder(FrameGraphData data)
+        : data_(rstd::move(data)),
+          lookup_(frame_graph_detail::Lookup::build(data_)),
+          authored_(false) {
         for (const auto& pass : data_.passes)
             for (const auto& use : pass.uses) next_use_ = rstd::cmp::max(next_use_, use.id + 1);
+        for (auto edge : data_.dependencies) {
+            auto before = pass_index(edge.before), after = pass_index(edge.after);
+            (void)edges_.insert(u64((Serial(before) << 32) | after));
+        }
+        for (auto version : data_.exports) (void)exports_.insert(version);
     }
     auto import_resource(ResourceDescription desc) -> Result<ResourceVersion, Error> {
         return declare_resource(rstd::move(desc), true);
@@ -155,15 +248,13 @@ public:
                        bool inherits = false, bool available = true)
         -> Result<ResourceVersion, Error> {
         if (pass_index(pass) == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
-        if (version_index(base) == invalid_index)
+        auto r = resource_index(base.resource);
+        if (r == invalid_index || version_index(base) == invalid_index)
             return Err(Error { ErrorKind::MissingResource, pass, base.resource });
-        Index next {};
-        for (const auto& version : data_.versions)
-            if (version.id.resource == base.resource)
-                next = rstd::cmp::max(next, version.id.version);
+        auto next = lookup_.latest[usize(r)];
         if (next == invalid_index) return Err(Error { ErrorKind::Limit, pass, base.resource });
         ResourceVersion output { base.resource, next + 1 };
-        data_.versions.push({ output, Some(pass), Some(base), inherits, same_storage, available });
+        append_version({ output, Some(pass), Some(base), inherits, same_storage, available });
         return Ok(output);
     }
     auto prepend_write(PassId pass, ResourceId resource) -> Result<ResourceVersion, Error> {
@@ -186,6 +277,11 @@ public:
         ResourceVersion output { resource, 1 };
         data_.versions.push(
             { output, Some(pass), Some(ResourceVersion { resource, 0 }), true, true, true });
+        auto largest_pass    = lookup_.largest_pass;
+        lookup_              = frame_graph_detail::Lookup::build(data_);
+        lookup_.largest_pass = largest_pass;
+        exports_.clear();
+        for (auto version : data_.exports) (void)exports_.insert(version);
         return Ok(output);
     }
     auto write_range(PassId pass, ResourceVersion output, Option<ResourceRange> selected = None())
@@ -222,6 +318,7 @@ public:
     auto add_pass(PassId id, LogicalQueueId queue = {}, String name = {}) -> Result<PassId, Error> {
         if (! id.valid()) return Err(Error { ErrorKind::Invalid, id });
         if (pass_index(id) != invalid_index) return Err(Error { ErrorKind::Duplicate, id });
+        lookup_.add_pass(id, Index(data_.passes.len().to_primitive()));
         data_.passes.push({ id, queue, rstd::move(name) });
         return Ok(id);
     }
@@ -255,54 +352,46 @@ public:
         return Ok(output);
     }
     auto depends_on(PassId pass, PassId before) -> Result<empty, Error> {
-        if (pass_index(pass) == invalid_index || pass_index(before) == invalid_index)
+        auto from = pass_index(before), to = pass_index(pass);
+        if (from == invalid_index || to == invalid_index)
             return Err(Error { ErrorKind::MissingPass, pass });
-        Dependency edge { before, pass };
-        for (auto previous : data_.dependencies)
-            if (previous == edge) return Ok(empty {});
-        data_.dependencies.push(rstd::move(edge));
+        if (edges_.insert(u64((Serial(from) << 32) | to)))
+            data_.dependencies.push({ before, pass });
         return Ok(empty {});
     }
     auto export_resource(ResourceVersion version) -> Result<empty, Error> {
         if (version_index(version) == invalid_index)
             return Err(Error { ErrorKind::MissingResource, {}, version.resource });
-        for (auto previous : data_.exports)
-            if (previous == version) return Ok(empty {});
-        data_.exports.push(rstd::move(version));
+        if (exports_.insert(version)) data_.exports.push(rstd::move(version));
         return Ok(empty {});
     }
     auto data() const -> const FrameGraphData& { return data_; }
     auto finish(Limits              limits     = {},
                 AnalysisStatistics* statistics = nullptr) && -> Result<FrameGraph, Error> {
-        return FrameGraph::create(rstd::move(data_), limits, statistics);
+        return FrameGraph::finish(
+            rstd::move(data_), rstd::move(lookup_), limits, authored_, statistics);
     }
 };
 } // namespace vrento::fg
 
 namespace vrento::fg
 {
-auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
-    -> Result<FrameGraphPlan, Error> {
+auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limits limits,
+                         bool authored) -> Result<FrameGraphPlan, Error> {
     if (! data.scope) return Err(Error { ErrorKind::Invalid });
     if (data.resources.len().to_primitive() > limits.resources ||
         data.versions.len().to_primitive() > limits.versions ||
         data.passes.len().to_primitive() > limits.passes ||
         data.dependencies.len().to_primitive() > limits.dependencies)
         return Err(Error { ErrorKind::Limit });
-    HashMap<u64, Index> resources, passes, versions;
-    auto                resource_index = [&](ResourceId id) -> Index {
-        auto found = resources.get(u64(id.value));
-        return found && data.resources[usize(**found)].id == id ? Index(**found) : invalid_index;
+    auto resource_index = [&](ResourceId id) {
+        return lookup.resource(data, id);
     };
-    auto pass_index = [&](PassId id) -> Index {
-        auto found = passes.get(u64(id.value));
-        return found ? Index(**found) : invalid_index;
+    auto pass_index = [&](PassId id) {
+        return lookup.pass(data, id);
     };
-    auto version_index = [&](ResourceVersion id) -> Index {
-        auto r = resource_index(id.resource);
-        if (r == invalid_index) return invalid_index;
-        auto found = versions.get(u64((Serial(r) << 32) | id.version));
-        return found ? Index(**found) : invalid_index;
+    auto version_index = [&](ResourceVersion id) {
+        return lookup.version(id);
     };
     struct AliasedUse {
         Index              pass, resource;
@@ -326,7 +415,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
             (r.kind == ResourceKind::Texture &&
              (! r.mip_levels || ! r.layers || ! r.aspects || (r.aspects & ~Index(7)))))
             return Err(Error { ErrorKind::Invalid, {}, r.id });
-        if (resources.insert(u64(r.id.value), Index(i)).is_some())
+        if (! authored && **lookup.resources.get(u64(r.id.value)) != i)
             return Err(Error { ErrorKind::Duplicate, {}, r.id });
         Index storage = invalid_index;
         if (r.storage) {
@@ -345,7 +434,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
     for (Index i {}; i < data.passes.len().to_primitive(); ++i) {
         const auto& p = data.passes[usize(i)];
         if (! p.id.valid()) return Err(Error { ErrorKind::Invalid, p.id });
-        if (passes.insert(u64(p.id.value), Index(i)).is_some())
+        if (! authored && **lookup.passes.get(p.id) != i)
             return Err(Error { ErrorKind::Duplicate, p.id });
         uses_count += p.uses.len().to_primitive();
         names += p.name.len().to_primitive();
@@ -357,7 +446,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         auto        r = resource_index(v.id.resource);
         if (r == invalid_index) return Err(Error { ErrorKind::MissingResource, {}, v.id.resource });
         version_resources.push(Index(r));
-        if (versions.insert(u64((Serial(r) << 32) | v.id.version), Index(i)).is_some())
+        if (! authored && lookup.version(v.id) != i)
             return Err(Error { ErrorKind::Duplicate, {}, v.id.resource });
         if (v.writer && pass_index(*v.writer) == invalid_index)
             return Err(Error { ErrorKind::MissingPass, *v.writer });
@@ -374,10 +463,19 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
     for (const auto& v : data.versions)
         if (v.previous && version_index(*v.previous) == invalid_index)
             return Err(Error { ErrorKind::MissingProducer, {}, v.id.resource });
+    struct StorageAccess {
+        Index         pass;
+        ResourceRange range;
+    };
+    FrameGraphPlan          plan { .use_count = uses_count, .name_bytes = names };
     Vec<Vec<ResourceRange>> writes;
+    Vec<Vec<StorageAccess>> reads;
     Vec<Vec<Index>>         version_uses;
+    plan.accesses.resize(data.versions.len(), VersionAccess {});
+    plan.resource_written.resize(data.resources.len(), false);
     for (usize i {}; i < data.versions.len(); ++i) {
         writes.push(Vec<ResourceRange> {});
+        reads.push(Vec<StorageAccess> {});
         version_uses.push(Vec<Index> {});
     }
     HashSet<u64> use_ids;
@@ -385,7 +483,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         const auto& p = data.passes[usize(pass)];
         for (const auto& use : p.uses) {
             auto r = resource_index(use.version.resource), v = version_index(use.version);
-            if (! use.id || ! use_ids.insert(u64(use.id)))
+            if (! authored && (! use.id || ! use_ids.insert(u64(use.id))))
                 return Err(Error { ErrorKind::Duplicate, p.id, use.version.resource });
             if (r == invalid_index || v == invalid_index)
                 return Err(Error { ErrorKind::MissingResource, p.id, use.version.resource });
@@ -393,14 +491,37 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                 return Err(Error { ErrorKind::Invalid, p.id, use.version.resource });
             if (! valid_range(data.resources[usize(r)], use.range))
                 return Err(Error { ErrorKind::Range, p.id, use.version.resource });
-            bool registered {};
-            for (auto existing : version_uses[usize(v)]) registered |= existing == pass;
-            if (! registered) version_uses[usize(v)].push(Index(pass));
+            auto& access = plan.accesses[usize(v)];
+            if (! access.used()) {
+                access.bounds = use.range;
+            } else {
+                auto& bound   = access.bounds;
+                auto  include = [](auto& start, auto& count, auto other_start, auto other_count) {
+                    auto end = rstd::cmp::max(start + count, other_start + other_count);
+                    start    = rstd::cmp::min(start, other_start);
+                    count    = end - start;
+                };
+                bound.aspect |= use.range.aspect;
+                include(bound.offset, bound.size, use.range.offset, use.range.size);
+                include(bound.first_mip, bound.mip_count, use.range.first_mip, use.range.mip_count);
+                include(bound.first_layer,
+                        bound.layer_count,
+                        use.range.first_layer,
+                        use.range.layer_count);
+            }
+            auto& consumers = version_uses[usize(v)];
+            if (consumers.is_empty() || *consumers.last().unwrap() != pass)
+                consumers.push(Index(pass));
             if (use.access == Access::Write) {
                 const auto& node = data.versions[usize(v)];
                 if (! node.writer || *node.writer != p.id)
                     return Err(Error { ErrorKind::Conflict, p.id, use.version.resource });
                 writes[usize(v)].push(ResourceRange(use.range));
+                access.written                  = true;
+                plan.resource_written[usize(r)] = true;
+            } else {
+                reads[usize(v)].push({ pass, use.range });
+                access.read = true;
             }
             const auto storage = resource_storage[usize(r)];
             if (storage != invalid_index && storage_groups[usize(storage)].aliased) {
@@ -438,7 +559,6 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         }
         return false;
     };
-    FrameGraphPlan  plan;
     Vec<Vec<Index>> predecessors;
     for (usize i {}; i < data.passes.len(); ++i) {
         plan.successors.push(Vec<Index> {});
@@ -512,10 +632,6 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
             }
         }
 
-    struct StorageAccess {
-        Index         pass;
-        ResourceRange range;
-    };
     HashMap<u64, Vec<StorageAccess>> frontiers;
     Vec<Index>                       ordered_versions;
     for (Index v {}; v < data.versions.len().to_primitive(); ++v) ordered_versions.push(Index(v));
@@ -555,17 +671,17 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
                 frontier = rstd::move(remaining);
             }
         }
-        for (auto p : version_uses[usize(v)])
-            for (const auto& use : data.passes[usize(p)].uses)
-                if (use.access == Access::Read && use.version == node.id)
-                    frontier.push({ p, use.range });
+        frontier.extend_from_slice(reads[usize(v)].as_slice());
     }
+    Vec<bool> retained_versions;
+    retained_versions.resize(data.versions.len(), false);
     for (auto exported : data.exports) {
         auto r = resource_index(exported.resource), v = version_index(exported);
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, {}, exported.resource });
         if (! available(exported, full_range(data.resources[usize(r)])))
             return Err(Error { ErrorKind::Undefined, {}, exported.resource });
+        retained_versions[usize(v)] = true;
     }
     Vec<Index> positions, batches;
     for (Index i {}; i < data.passes.len().to_primitive(); ++i) {
@@ -621,8 +737,9 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
     for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
         const auto&     node = data.versions[usize(i)];
         const auto&     r    = data.resources[usize(resource_index(node.id.resource))];
-        VersionLifetime life { .version = node.id, .retained = r.imported || r.retained };
-        for (auto exported : data.exports) life.retained |= exported == node.id;
+        VersionLifetime life { .version = node.id,
+                               .retained =
+                                   r.imported || r.retained || retained_versions[usize(i)] };
         for (auto p : version_uses[usize(i)]) {
             life.uses.push(Index(p));
             life.first = rstd::cmp::min(life.first, positions[usize(p)]);
@@ -631,56 +748,65 @@ auto FrameGraph::analyze(const FrameGraphData& data, Limits limits)
         plan.lifetimes.push(rstd::move(life));
     }
     struct Group {
-        Index      root, slot;
+        Index      slot;
         Serial     allocation_class;
         Vec<Index> uses;
         bool       retained {};
     };
     Vec<Group> groups;
+    Vec<Index> groups_by_root;
+    groups_by_root.resize(data.versions.len(), invalid_index);
     for (auto p : plan.order)
         for (const auto& use : data.passes[usize(p)].uses) {
             auto  v = version_index(use.version), owner = root(v);
-            Index group = invalid_index;
-            for (Index i {}; i < groups.len().to_primitive(); ++i)
-                if (groups[usize(i)].root == owner) group = i;
+            auto& group = groups_by_root[usize(owner)];
             if (group == invalid_index) {
                 const auto& r = data.resources[usize(resource_index(use.version.resource))];
                 group         = Index(groups.len().to_primitive());
-                groups.push({ owner, invalid_index, r.allocation_class, {} });
+                groups.push({ invalid_index, r.allocation_class, {} });
             }
             auto& value = groups[usize(group)];
             value.retained |= plan.lifetimes[usize(v)].retained;
-            bool seen {};
-            for (auto previous : value.uses) seen |= previous == p;
-            if (! seen) value.uses.push(Index(p));
+            if (value.uses.is_empty() || *value.uses.last().unwrap() != p)
+                value.uses.push(Index(p));
         }
     Index next_slot {};
+    HashMap<u64, Vec<Index>> reusable;
     for (usize i {}; i < groups.len(); ++i) {
         auto& group = groups[i];
-        if (! group.retained && group.allocation_class)
-            for (usize j {}; j < i; ++j) {
-                const auto& previous = groups[j];
-                if (previous.retained || previous.allocation_class != group.allocation_class)
-                    continue;
+        if (group.retained || ! group.allocation_class) {
+            group.slot = next_slot++;
+        } else {
+            auto key = u64(group.allocation_class);
+            if (! reusable.get(key)) (void)reusable.insert(key, Vec<Index> {});
+            auto& tails = **reusable.get_mut(key);
+            for (auto& tail : tails) {
+                const auto& previous = groups[usize(tail)];
                 bool safe = true;
-                for (usize k {}; k < i; ++k)
-                    if (groups[k].slot == previous.slot)
-                        for (auto before : groups[k].uses)
-                            for (auto after : group.uses)
-                                safe &= plan.precedes(before, after, reachability);
+                // Each earlier occupant of this slot precedes its tail transitively.
+                for (auto before : previous.uses) {
+                    for (auto after : group.uses)
+                        if (! plan.precedes(before, after, reachability)) {
+                            safe = false;
+                            break;
+                        }
+                    if (! safe) break;
+                }
                 if (safe) {
                     group.slot = previous.slot;
+                    tail       = Index(i.to_primitive());
                     break;
                 }
             }
-        if (group.slot == invalid_index) group.slot = next_slot++;
+            if (group.slot == invalid_index) {
+                group.slot = next_slot++;
+                tails.push(Index(i.to_primitive()));
+            }
+        }
     }
     for (Index v {}; v < data.versions.len().to_primitive(); ++v) {
-        auto  owner = root(v);
-        Index slot  = invalid_index;
-        for (const auto& group : groups)
-            if (group.root == owner) slot = group.slot;
-        if (slot == invalid_index) slot = next_slot++;
+        auto group = groups_by_root[usize(root(v))];
+        auto slot  = group == invalid_index ? next_slot++ : groups[usize(group)].slot;
         plan.allocations.push({ data.versions[usize(v)].id, slot });
     }
     return Ok(rstd::move(plan));

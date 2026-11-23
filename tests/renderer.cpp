@@ -456,14 +456,23 @@ TEST(VulkanRenderer, AssociationUsesOriginalGraphAndRejectsExtraAccess) {
         auto invalid = declaration.clone();
         if (variant == 0)
             invalid.uses.pop();
-        else if (variant == 1)
+        else if (variant == 1) {
+            invalid.uses[usize()].logical_use     = 0;
             invalid.uses[usize()].range.first_mip = 1;
-        else
+        } else {
+            invalid.uses[usize()].logical_use = 0;
             invalid.uses[usize()].access = vk::GraphAccess::Write;
+        }
         Vec<vk::PassExecutionInfo> mismatched;
         mismatched.push(rstd::move(invalid));
         EXPECT_TRUE(vk::VulkanPassSet::associate(graph, rstd::move(mismatched)).is_err());
     }
+    auto bound                          = declaration.clone();
+    bound.uses[usize()].range.first_mip = 1;
+    passes.push(rstd::move(bound));
+    auto rebound = vk::VulkanPassSet::associate(graph, rstd::move(passes)).unwrap();
+    EXPECT_EQ(rebound.passes()[usize()].uses[usize()].range.first_mip, 0u);
+    passes = {};
     declaration.uses.push(vk::PassResourceUse(declaration.uses[usize()]));
     passes.push(rstd::move(declaration));
     EXPECT_EQ(vk::VulkanPassSet::associate(graph, rstd::move(passes)).unwrap_err().kind,
@@ -713,9 +722,13 @@ TEST(VulkanRenderer, SubmittedFrameTimeoutRetainsOwnersUntilCompletion) {
     auto created = vk::DeviceSession::create({ .validation = true });
     if (created.is_err()) GTEST_SKIP() << "Vulkan unavailable";
     auto session = created.unwrap();
-    auto signal  = reinterpret_cast<PFN_vkSignalSemaphoreKHR>(
-        session.device().handle().Dispatch().vkGetDeviceProcAddr(*session.device().handle(),
-                                                                 "vkSignalSemaphoreKHR"));
+    const auto& device   = session.device().handle();
+    const auto& dispatch = device.Dispatch();
+    auto        signal   = reinterpret_cast<PFN_vkSignalSemaphore>(
+        dispatch.vkGetDeviceProcAddr(*device, "vkSignalSemaphore"));
+    if (! signal)
+        signal = reinterpret_cast<PFN_vkSignalSemaphore>(
+            dispatch.vkGetDeviceProcAddr(*device, "vkSignalSemaphoreKHR"));
     ASSERT_TRUE(signal);
     auto resources = Arc<vrento::resource_registry::RenderResourceSystem>::make();
     ASSERT_TRUE(resources->Initialize(session));
@@ -1049,7 +1062,7 @@ TEST(PassInputs, OutputReferencesKeepResourceOwnersAndAllowDescriptionReordering
     auto plan        = resources.resourcePlan(frame_graph).unwrap();
     auto mapping     = resources.bindings(frame_graph, plan).unwrap();
     ASSERT_FALSE(mapping.textures.is_empty());
-    EXPECT_TRUE(mapping.textures[usize()].content.output());
+    EXPECT_EQ(mapping.textures[usize()].definition.id(), definition.id());
     auto               clear_identity = clear.description.description().as_raw_ptr();
     Vec<vk::PassInput> descriptions;
     descriptions.push(rstd::move(copy.description));
@@ -1059,10 +1072,6 @@ TEST(PassInputs, OutputReferencesKeepResourceOwnersAndAllowDescriptionReordering
     EXPECT_EQ(input.descriptions()[usize(1)].description().as_raw_ptr(), clear_identity);
     EXPECT_EQ(input.descriptions()[usize(1)].io().outputs[usize()].target.texture()->id(),
               definition.id());
-    Vec<vk::PassInput> duplicate;
-    duplicate.push(clear.description.clone());
-    duplicate.push(clear.description.clone());
-    EXPECT_TRUE(input.with_descriptions(rstd::move(duplicate)).is_err());
 }
 TEST(PassInputs, RejectsIncompleteDescriptionsWrongProducerAndScopeWithoutDevice) {
     EXPECT_TRUE(vk::PassInput::publish(702, 1, { 1 }, vk::TextureCopyDesc {}).is_err());

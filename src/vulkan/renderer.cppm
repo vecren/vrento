@@ -108,8 +108,10 @@ public:
                  Option<Arc<GraphicsCompileResources>> resources = None())
         -> Result<CompileProgress, GraphExecutionError> {
         pass::GraphResourceMap mapping { .scope = graph.scope() };
-        for (const auto& node : graph.passes())
-            for (const auto& use : node.uses) mapping.externals.push(fg::ResourceUse(use));
+        const auto&            plan = graph.inspect();
+        for (usize i {}; i < plan.accesses.len(); ++i)
+            if (plan.accesses[i].used())
+                mapping.externals.push(fg::ResourceVersion(plan.lifetimes[i].version));
         auto input =
             GraphInput::create(rstd::move(graph), rstd::move(descriptions), rstd::move(mapping));
         if (input.is_err()) {
@@ -163,17 +165,6 @@ private:
                 {},
                 session_.lost() ? GraphExecutionCause::Native(VK_ERROR_DEVICE_LOST)
                                 : GraphExecutionCause::Reason(GraphFailure::Closed) });
-        for (usize i {}; i < descriptions.len(); ++i) {
-            const auto& input = descriptions[i];
-            if (input.scope() != graph.scope() || ! input.revision() ||
-                ! input.execution().id.value)
-                return Err(
-                    GraphExecutionError { GraphExecutionStage::Schema, input.execution().id });
-            for (usize j {}; j < i; ++j)
-                if (descriptions[j].execution().id == input.execution().id)
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Schema, input.execution().id });
-        }
         if (compiled_) {
             const auto& previous = *compiled_->data_;
             if (graph.scope() != previous.graph.scope())
@@ -185,14 +176,8 @@ private:
                     status_.reason = CompileReason::Graph;
                 else {
                     bool same = descriptions.len() == previous.input.descriptions().len();
-                    if (same)
-                        for (const auto& description : descriptions) {
-                            bool found {};
-                            for (const auto& cached : previous.input.descriptions())
-                                if (cached.execution().id == description.execution().id)
-                                    found = description.same_input(cached);
-                            same &= found;
-                        }
+                    for (usize i {}; same && i < descriptions.len(); ++i)
+                        same = descriptions[i].same_input(previous.input.descriptions()[i]);
                     if (! same)
                         status_.reason = CompileReason::Description;
                     else if (! input.resources().same_bindings(previous.input.resources()) ||
@@ -214,7 +199,15 @@ private:
             if (desc.scope() != graph.scope() || ! desc.revision())
                 return Err(
                     GraphExecutionError { GraphExecutionStage::Schema, desc.execution().id });
-            declarations.push(desc.execution().clone());
+            auto lowered = desc.lower(graph);
+            if (lowered.is_err()) {
+                auto error = lowered.unwrap_err();
+                return Err(GraphExecutionError { GraphExecutionStage::Graph,
+                                                 error.pass,
+                                                 error.resource,
+                                                 GraphExecutionCause::Graph(error) });
+            }
+            declarations.push(lowered.unwrap());
         }
         auto set = VulkanPassSet::associate(rstd::move(graph), rstd::move(declarations));
         if (set.is_err())
@@ -223,13 +216,6 @@ private:
                 set.unwrap_err().pass,
                 set.unwrap_err().resource,
                 vrento::vulkan::GraphExecutionCause::Graph(set.unwrap_err()) });
-        for (const auto& desc : descriptions) {
-            bool found {};
-            for (const auto& entry : factories_) found |= entry.type == desc.type();
-            if (! found)
-                return Err(
-                    GraphExecutionError { GraphExecutionStage::Schema, desc.execution().id });
-        }
         pending_ = Some(PendingCompile {
             Some(set.unwrap()), Some(rstd::move(input)), {}, {}, rstd::move(resources) });
         return advance_compile();
@@ -288,7 +274,12 @@ private:
             for (auto& entry : factories_)
                 if (entry.type == desc.type()) {
                     ++statistics_.native_compiles;
-                    auto result = entry.factory->Compile(desc, context);
+                    const auto& pass =
+                        pending.graph
+                            ? pending.graph->passes()[usize(
+                                  pending.graph->frame_graph().pass_slot(desc.execution().id))]
+                            : desc.execution();
+                    auto result = entry.factory->Compile(desc, pass, context);
                     if (result.is_err()) {
                         auto error = result.unwrap_err();
                         error.pass = desc.execution().id;

@@ -151,17 +151,29 @@ enum class DependencySource : Index
 struct DependencyInfo {
     Index before {}, after {}, sources {};
 };
+struct VersionAccess {
+    bool          read {}, written {};
+    ResourceRange bounds;
+    bool          used() const { return read || written; }
+};
 struct FrameGraphPlan {
+    Serial               use_count {}, name_bytes {};
     Vec<Index>           order;
     Vec<ExecutionBatch>  batches;
     Vec<VersionLifetime> lifetimes;
     Vec<AllocationSlot>  allocations;
+    Vec<VersionAccess>   accesses;
+    Vec<bool>            resource_written;
     Vec<DependencyInfo>  dependencies;
     Vec<Vec<Index>>      successors;
     auto                 clone() const -> FrameGraphPlan {
-        FrameGraphPlan result { .order        = order.clone(),
-                                .allocations  = allocations.clone(),
-                                .dependencies = dependencies.clone() };
+        FrameGraphPlan result { .use_count        = use_count,
+                                .name_bytes       = name_bytes,
+                                .order            = order.clone(),
+                                .allocations      = allocations.clone(),
+                                .accesses         = accesses.clone(),
+                                .resource_written = resource_written.clone(),
+                                .dependencies     = dependencies.clone() };
         for (const auto& batch : batches) result.batches.push(batch.clone());
         for (const auto& life : lifetimes) result.lifetimes.push(life.clone());
         for (const auto& next : successors) result.successors.push(next.clone());

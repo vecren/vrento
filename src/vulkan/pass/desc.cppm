@@ -45,13 +45,14 @@ struct VulkanPassIO {
         }
         return result;
     }
-    auto execution(PassId id) const -> PassExecutionInfo {
+    auto execution(PassId id, bool include_uses = true) const -> PassExecutionInfo {
         PassExecutionInfo result { .id             = id,
                                    .kind           = kind,
                                    .schema_version = schema_version,
                                    .queue          = queue,
                                    .parameters     = parameters.clone(),
                                    .graphics       = graphics };
+        if (! include_uses) return result;
         auto              append = [&](const VulkanResourceUse& use, GraphAccess access) {
             auto version = use.content.version();
             result.uses.push(
