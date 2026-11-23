@@ -41,6 +41,67 @@ TEST(FrameGraph, VersionsAndOwnership) {
     rstd_assert(retained.passes().len() == usize(130));
     rstd_assert(frozen.compile({ .uses = 1 }).unwrap_err().kind == ErrorKind::Limit);
 }
+TEST(FrameGraph, IndexesInterleavedVersionsAndPrependedWrites) {
+    FrameGraphBuilder graph(11);
+    const auto        a         = graph.import_resource(texture(1)).unwrap();
+    const auto        b         = graph.import_resource(texture(100)).unwrap();
+    const auto        first     = graph.add_pass({ 1 }).unwrap();
+    const auto        second    = graph.add_pass({ 2 }).unwrap();
+    const auto        bootstrap = graph.add_pass({ 3 }).unwrap();
+    const auto        a1        = graph.write(first, a).unwrap();
+    const auto        b1        = graph.write(bootstrap, b).unwrap();
+    const auto        a2        = graph.write(second, a1, None(), true, true).unwrap();
+    graph.export_resource(a2).unwrap();
+
+    const auto prepended = graph.prepend_write(bootstrap, a.resource).unwrap();
+    EXPECT_EQ(graph.output_ordinal(b1), 0u);
+    EXPECT_EQ(graph.output_ordinal(prepended), 1u);
+    graph.write_range(bootstrap, prepended).unwrap();
+    const auto last = graph.add_pass({ 4 }).unwrap();
+    const auto a3   = ResourceVersion { a.resource, 3 };
+    const auto a4   = graph.write(last, a3).unwrap();
+    EXPECT_EQ(a4.version, 4u);
+
+    const auto frozen = rstd::move(graph).finish().unwrap();
+    EXPECT_EQ(frozen.version_index(a), 0u);
+    EXPECT_EQ(frozen.version_index(b1), 3u);
+    EXPECT_EQ(frozen.version_index(a2), 2u);
+    EXPECT_EQ(frozen.version_index(a3), 4u);
+    EXPECT_EQ(frozen.version_index(prepended), 5u);
+    EXPECT_EQ(frozen.version_index(a4), 6u);
+    EXPECT_EQ(frozen.version_index({ a.resource, 5 }), invalid_index);
+    EXPECT_EQ(frozen.version_index({ { b.resource.value, 2 }, 1 }), invalid_index);
+    EXPECT_EQ(frozen.exports()[usize()], a3);
+}
+
+TEST(FrameGraph, ImportsSparseVersionsWithoutChangingTheirIds) {
+    constexpr Index   sparse = 0xf0000000u;
+    FrameGraphBuilder graph(11);
+    const auto        initial = graph.import_resource(texture(1)).unwrap();
+    const auto        writer  = graph.add_pass({ 1 }).unwrap();
+    const auto        written = graph.write(writer, initial).unwrap();
+    graph.export_resource(written).unwrap();
+    auto imported = rstd::move(graph).finish().unwrap().clone_data();
+    rstd::swap(imported.versions[usize()], imported.versions[usize(1)]);
+    imported.versions[usize()].id.version                  = sparse;
+    imported.passes[usize()].uses[usize()].version.version = sparse;
+    imported.exports[usize()].version                      = sparse;
+    auto frozen = FrameGraph::create(imported.clone()).unwrap();
+    auto high   = ResourceVersion { initial.resource, sparse };
+    EXPECT_EQ(frozen.version_index(high), 0u);
+    EXPECT_EQ(frozen.version_index(initial), 1u);
+    EXPECT_EQ(frozen.version_index(written), invalid_index);
+
+    auto       edited = FrameGraphBuilder(imported.clone());
+    auto       second = edited.add_pass({ 2 }).unwrap();
+    const auto next   = edited.write(second, high).unwrap();
+    EXPECT_EQ(next.version, sparse + 1);
+    EXPECT_EQ(rstd::move(edited).finish().unwrap().version_index(next), 2u);
+
+    imported.versions.push(VersionNode(imported.versions[usize()]));
+    EXPECT_EQ(FrameGraph::create(rstd::move(imported)).unwrap_err().kind, ErrorKind::Duplicate);
+}
+
 TEST(FrameGraph, SlotsAndLastWrites) {
     FrameGraphBuilder graph(1);
     auto              value  = graph.create_resource(texture(1)).unwrap();

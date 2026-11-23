@@ -13,12 +13,44 @@ struct AnalysisStatistics {
 };
 namespace frame_graph_detail
 {
+struct VersionSlots {
+    Index      initial { invalid_index }, first_write { invalid_index };
+    Vec<Index> later_writes;
+
+    auto get(Index version) const -> Index {
+        if (! version) return initial;
+        if (version == 1) return first_write;
+        const auto offset = usize(version - 2);
+        return offset < later_writes.len() ? later_writes[offset] : invalid_index;
+    }
+    auto latest() const -> Index {
+        return first_write == invalid_index ? 0 : Index(later_writes.len().to_primitive()) + 1;
+    }
+    void append(Index slot) {
+        if (initial == invalid_index)
+            initial = slot;
+        else if (first_write == invalid_index)
+            first_write = slot;
+        else
+            later_writes.push(Index(slot));
+    }
+    void prepend_write(Index slot) {
+        if (first_write != invalid_index) later_writes.insert(usize(), Index(first_write));
+        first_write = slot;
+    }
+};
+
 struct Lookup {
-    HashMap<u64, Index>             resources;
-    HashMap<PassId, Index>          passes;
-    HashMap<ResourceVersion, Index> versions;
-    Vec<Index>                      latest, output_ordinals, output_counts;
-    Serial                          largest_resource {}, largest_pass {};
+    struct ImportedVersions {
+        HashMap<ResourceVersion, Index> slots;
+        Vec<Index>                      latest;
+    };
+    HashMap<u64, Index>      resources;
+    HashMap<PassId, Index>   passes;
+    Vec<VersionSlots>        versions;
+    Option<ImportedVersions> imported_versions;
+    Vec<Index>               output_ordinals, output_counts;
+    Serial                   largest_resource {}, largest_pass {};
 
     auto resource(const FrameGraphData& data, ResourceId id) const -> Index {
         if (id.value && id.value <= data.resources.len().to_primitive() &&
@@ -34,13 +66,27 @@ struct Lookup {
         auto found = passes.get(id);
         return found ? **found : invalid_index;
     }
-    auto version(ResourceVersion id) const -> Index {
-        auto found = versions.get(id);
-        return found ? **found : invalid_index;
+    auto version(Index resource_slot, ResourceVersion id) const -> Index {
+        if (imported_versions) {
+            auto found = imported_versions->slots.get(id);
+            return found ? **found : invalid_index;
+        }
+        return resource_slot == invalid_index ? invalid_index
+                                              : versions[usize(resource_slot)].get(id.version);
+    }
+    auto version(const FrameGraphData& data, ResourceVersion id) const -> Index {
+        return version(resource(data, id.resource), id);
+    }
+    auto latest(Index resource_slot) const -> Index {
+        return imported_versions ? imported_versions->latest[usize(resource_slot)]
+                                 : versions[usize(resource_slot)].latest();
     }
     void add_resource(ResourceId id, Index index) {
         (void)resources.insert(u64(id.value), Index(index));
-        latest.push(Index {});
+        if (imported_versions)
+            imported_versions->latest.push(Index {});
+        else
+            versions.push(VersionSlots {});
         largest_resource = rstd::cmp::max(largest_resource, id.value);
     }
     void add_pass(PassId id, Index index) {
@@ -48,23 +94,36 @@ struct Lookup {
         output_counts.push(Index {});
         largest_pass = rstd::cmp::max(largest_pass, id.value);
     }
-    void add_version(const FrameGraphData& data, const VersionNode& node, Index index) {
-        (void)versions.insert(node.id, Index(index));
-        auto r = resource(data, node.id.resource);
-        if (r != invalid_index)
-            latest[usize(r)] = rstd::cmp::max(latest[usize(r)], node.id.version);
-        auto writer = node.writer ? pass(data, *node.writer) : invalid_index;
+    void add_output(Index writer) {
         output_ordinals.push(writer == invalid_index ? invalid_index
                                                      : output_counts[usize(writer)]++);
     }
+    void add_version(ResourceVersion id, Index resource_slot, Index writer, Index index) {
+        if (imported_versions) {
+            (void)imported_versions->slots.insert(id, Index(index));
+            if (resource_slot != invalid_index) {
+                auto& latest = imported_versions->latest[usize(resource_slot)];
+                latest       = rstd::cmp::max(latest, id.version);
+            }
+        } else {
+            versions[usize(resource_slot)].append(index);
+        }
+        add_output(writer);
+    }
     static auto build(const FrameGraphData& data) -> Lookup {
         Lookup result;
+        result.imported_versions = Some(ImportedVersions {});
         for (Index i {}; i < data.resources.len().to_primitive(); ++i)
             result.add_resource(data.resources[usize(i)].id, i);
         for (Index i {}; i < data.passes.len().to_primitive(); ++i)
             result.add_pass(data.passes[usize(i)].id, i);
-        for (Index i {}; i < data.versions.len().to_primitive(); ++i)
-            result.add_version(data, data.versions[usize(i)], i);
+        for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
+            const auto& node = data.versions[usize(i)];
+            result.add_version(node.id,
+                               result.resource(data, node.id.resource),
+                               node.writer ? result.pass(data, *node.writer) : invalid_index,
+                               i);
+        }
         return result;
     }
 };
@@ -118,21 +177,23 @@ public:
         auto i = version_index(id);
         return i == invalid_index ? nullptr : rstd::addressof(versions()[usize(i)]);
     }
-    auto version_index(ResourceVersion id) const -> Index { return data_->lookup.version(id); }
+    auto version_index(ResourceVersion id) const -> Index {
+        return data_->lookup.version(data_->graph, id);
+    }
     auto find_pass(PassId id) const -> const PassNode* {
         auto i = data_->lookup.pass(data_->graph, id);
         return i == invalid_index ? nullptr : rstd::addressof(passes()[usize(i)]);
     }
     auto output_ordinal(ResourceVersion id) const -> Index {
-        auto i = data_->lookup.version(id);
+        auto i = version_index(id);
         return i == invalid_index ? invalid_index : data_->lookup.output_ordinals[usize(i)];
     }
     auto version_access(ResourceVersion id) const -> VersionAccess {
-        auto i = data_->lookup.version(id);
+        auto i = version_index(id);
         return i == invalid_index ? VersionAccess {} : data_->plan.accesses[usize(i)];
     }
     auto allocation_slot(ResourceVersion id) const -> Index {
-        auto i = data_->lookup.version(id);
+        auto i = version_index(id);
         return i == invalid_index ? invalid_index : data_->plan.allocations[usize(i)].slot;
     }
     bool has_resource_writes(ResourceId id) const {
@@ -170,17 +231,18 @@ public:
 };
 
 class FrameGraphBuilder {
-    FrameGraphData data_;
+    FrameGraphData             data_;
     frame_graph_detail::Lookup lookup_;
     HashSet<u64>               edges_;
     HashSet<ResourceVersion>   exports_;
-    Serial         next_use_ { 1 };
+    Serial                     next_use_ { 1 };
     bool                       authored_ { true };
     auto resource_index(ResourceId id) const -> Index { return lookup_.resource(data_, id); }
     auto pass_index(PassId id) const -> Index { return lookup_.pass(data_, id); }
-    auto version_index(ResourceVersion id) const -> Index { return lookup_.version(id); }
-    void append_version(VersionNode node) {
-        lookup_.add_version(data_, node, Index(data_.versions.len().to_primitive()));
+    auto version_index(ResourceVersion id) const -> Index { return lookup_.version(data_, id); }
+    void append_version(VersionNode node, Index resource_slot, Index writer) {
+        lookup_.add_version(
+            node.id, resource_slot, writer, Index(data_.versions.len().to_primitive()));
         data_.versions.push(rstd::move(node));
     }
     auto declare_resource(ResourceDescription desc, bool imported)
@@ -190,9 +252,10 @@ class FrameGraphBuilder {
             return Err(Error { ErrorKind::Duplicate, {}, desc.id });
         desc.imported = imported;
         ResourceVersion first { desc.id, 0 };
-        lookup_.add_resource(desc.id, Index(data_.resources.len().to_primitive()));
+        const auto      slot = Index(data_.resources.len().to_primitive());
+        lookup_.add_resource(desc.id, slot);
         data_.resources.push(rstd::move(desc));
-        append_version({ .id = first, .available = imported });
+        append_version({ .id = first, .available = imported }, slot, invalid_index);
         return Ok(first);
     }
 
@@ -237,7 +300,7 @@ public:
         return declare_resource(rstd::move(desc), false);
     }
     auto import_initial(ResourceId id, bool retained = true) -> Result<empty, Error> {
-        auto r = resource_index(id), v = version_index({ id, 0 });
+        auto r = resource_index(id), v = lookup_.version(r, { id, 0 });
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, {}, id });
         data_.resources[usize(r)].imported = true;
@@ -248,23 +311,25 @@ public:
     auto reserve_write(PassId pass, ResourceVersion base, bool same_storage = false,
                        bool inherits = false, bool available = true)
         -> Result<ResourceVersion, Error> {
-        if (pass_index(pass) == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
+        const auto writer = pass_index(pass);
+        if (writer == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
         auto r = resource_index(base.resource);
-        if (r == invalid_index || version_index(base) == invalid_index)
+        if (r == invalid_index || lookup_.version(r, base) == invalid_index)
             return Err(Error { ErrorKind::MissingResource, pass, base.resource });
-        auto next = lookup_.latest[usize(r)];
+        auto next = lookup_.latest(r);
         if (next == invalid_index) return Err(Error { ErrorKind::Limit, pass, base.resource });
         ResourceVersion output { base.resource, next + 1 };
-        append_version({ output, Some(pass), Some(base), inherits, same_storage, available });
+        append_version(
+            { output, Some(pass), Some(base), inherits, same_storage, available }, r, writer);
         return Ok(output);
     }
     auto prepend_write(PassId pass, ResourceId resource) -> Result<ResourceVersion, Error> {
-        if (pass_index(pass) == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
-        if (resource_index(resource) == invalid_index)
-            return Err(Error { ErrorKind::MissingResource, pass, resource });
-        for (const auto& version : data_.versions)
-            if (version.id.resource == resource && version.id.version == invalid_index)
-                return Err(Error { ErrorKind::Limit, pass, resource });
+        const auto writer = pass_index(pass);
+        if (writer == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
+        const auto r = resource_index(resource);
+        if (r == invalid_index) return Err(Error { ErrorKind::MissingResource, pass, resource });
+        if (lookup_.latest(r) == invalid_index)
+            return Err(Error { ErrorKind::Limit, pass, resource });
         for (auto& version : data_.versions) {
             if (version.id.resource != resource) continue;
             if (version.id.version) ++version.id.version;
@@ -276,18 +341,25 @@ public:
         for (auto& output : data_.exports)
             if (output.resource == resource) ++output.version;
         ResourceVersion output { resource, 1 };
+        const auto      slot = Index(data_.versions.len().to_primitive());
         data_.versions.push(
             { output, Some(pass), Some(ResourceVersion { resource, 0 }), true, true, true });
-        auto largest_pass    = lookup_.largest_pass;
-        lookup_              = frame_graph_detail::Lookup::build(data_);
-        lookup_.largest_pass = largest_pass;
+        if (authored_) {
+            lookup_.versions[usize(r)].prepend_write(slot);
+            lookup_.add_output(writer);
+        } else {
+            auto largest_pass    = lookup_.largest_pass;
+            lookup_              = frame_graph_detail::Lookup::build(data_);
+            lookup_.largest_pass = largest_pass;
+        }
         exports_.clear();
         for (auto version : data_.exports) (void)exports_.insert(version);
         return Ok(output);
     }
     auto write_range(PassId pass, ResourceVersion output, Option<ResourceRange> selected = None())
         -> Result<Serial, Error> {
-        auto p = pass_index(pass), r = resource_index(output.resource), v = version_index(output);
+        auto p = pass_index(pass), r = resource_index(output.resource),
+             v = lookup_.version(r, output);
         if (p == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, pass, output.resource });
@@ -325,7 +397,8 @@ public:
     }
     auto read(PassId pass, ResourceVersion version, Option<ResourceRange> selected = None(),
               bool requires_contents = true) -> Result<Serial, Error> {
-        auto p = pass_index(pass), r = resource_index(version.resource), v = version_index(version);
+        auto p = pass_index(pass), r = resource_index(version.resource),
+             v = lookup_.version(r, version);
         if (p == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, pass, version.resource });
@@ -339,7 +412,7 @@ public:
     auto write(PassId pass, ResourceVersion base, Option<ResourceRange> selected = None(),
                bool same_storage = false, bool inherits = false, bool available = true)
         -> Result<ResourceVersion, Error> {
-        auto p = pass_index(pass), r = resource_index(base.resource), v = version_index(base);
+        auto p = pass_index(pass), r = resource_index(base.resource), v = lookup_.version(r, base);
         if (p == invalid_index) return Err(Error { ErrorKind::MissingPass, pass });
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, pass, base.resource });
@@ -390,9 +463,6 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
     };
     auto pass_index = [&](PassId id) {
         return lookup.pass(data, id);
-    };
-    auto version_index = [&](ResourceVersion id) {
-        return lookup.version(id);
     };
     struct AliasedUse {
         Index              pass, resource;
@@ -447,7 +517,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
         auto        r = resource_index(v.id.resource);
         if (r == invalid_index) return Err(Error { ErrorKind::MissingResource, {}, v.id.resource });
         version_resources.push(Index(r));
-        if (! authored && lookup.version(v.id) != i)
+        if (! authored && lookup.version(r, v.id) != i)
             return Err(Error { ErrorKind::Duplicate, {}, v.id.resource });
         if (v.writer && pass_index(*v.writer) == invalid_index)
             return Err(Error { ErrorKind::MissingPass, *v.writer });
@@ -461,9 +531,17 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
             (v.previous->resource != v.id.resource || v.previous->version >= v.id.version))
             return Err(Error { ErrorKind::Invalid, {}, v.id.resource });
     }
-    for (const auto& v : data.versions)
-        if (v.previous && version_index(*v.previous) == invalid_index)
-            return Err(Error { ErrorKind::MissingProducer, {}, v.id.resource });
+    auto previous_versions = Vec<Index>::with_capacity(data.versions.len());
+    for (usize i {}; i < data.versions.len(); ++i) {
+        const auto& node     = data.versions[i];
+        auto        previous = invalid_index;
+        if (node.previous) {
+            previous = lookup.version(version_resources[i], *node.previous);
+            if (previous == invalid_index)
+                return Err(Error { ErrorKind::MissingProducer, {}, node.id.resource });
+        }
+        previous_versions.push(Index(previous));
+    }
     struct StorageAccess {
         Index         pass;
         ResourceRange range;
@@ -480,10 +558,13 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
         version_uses.push(Vec<Index> {});
     }
     HashSet<u64> use_ids;
+    auto         resolved_uses = Vec<Index>::with_capacity(usize(uses_count));
+    auto         use_offsets   = Vec<usize>::with_capacity(data.passes.len());
     for (Index pass {}; pass < data.passes.len().to_primitive(); ++pass) {
         const auto& p = data.passes[usize(pass)];
+        use_offsets.push(resolved_uses.len());
         for (const auto& use : p.uses) {
-            auto r = resource_index(use.version.resource), v = version_index(use.version);
+            auto r = resource_index(use.version.resource), v = lookup.version(r, use.version);
             if (! authored && (! use.id || ! use_ids.insert(u64(use.id))))
                 return Err(Error { ErrorKind::Duplicate, p.id, use.version.resource });
             if (r == invalid_index || v == invalid_index)
@@ -492,6 +573,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
                 return Err(Error { ErrorKind::Invalid, p.id, use.version.resource });
             if (! valid_range(data.resources[usize(r)], use.range))
                 return Err(Error { ErrorKind::Range, p.id, use.version.resource });
+            resolved_uses.push(Index(v));
             auto& access = plan.accesses[usize(v)];
             if (! access.used()) {
                 access.bounds = use.range;
@@ -536,15 +618,14 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
             return Err(Error { ErrorKind::MissingProducer,
                                *data.versions[i].writer,
                                data.versions[i].id.resource });
-    auto available = [&](ResourceVersion requested, ResourceRange range) -> bool {
+    auto available = [&](Index v, ResourceRange range) -> bool {
         Vec<ResourceRange> uncovered;
         uncovered.push(rstd::move(range));
-        auto v = version_index(requested);
         while (v != invalid_index) {
-            const auto& node = data.versions[usize(v)];
-            if (! node.writer)
-                return data.resources[usize(resource_index(node.id.resource))].imported;
-            auto kind = data.resources[usize(resource_index(node.id.resource))].kind;
+            const auto& node     = data.versions[usize(v)];
+            const auto& resource = data.resources[usize(version_resources[usize(v)])];
+            if (! node.writer) return resource.imported;
+            auto kind = resource.kind;
             for (auto written : writes[usize(v)]) {
                 Vec<ResourceRange> remainder;
                 for (auto part : uncovered) {
@@ -555,8 +636,8 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
                 uncovered = rstd::move(remainder);
             }
             if (uncovered.is_empty()) return true;
-            if (! node.inherits || ! node.previous) return false;
-            v = version_index(*node.previous);
+            if (! node.inherits) return false;
+            v = previous_versions[usize(v)];
         }
         return false;
     };
@@ -594,10 +675,11 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
         return i;
     };
     for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
-        const auto& v       = data.versions[usize(i)];
-        const auto  storage = resource_storage[usize(version_resources[usize(i)])];
-        if (v.previous && (v.same_storage || storage != invalid_index))
-            roots[usize(root(i))] = root(version_index(*v.previous));
+        const auto& v        = data.versions[usize(i)];
+        const auto  storage  = resource_storage[usize(version_resources[usize(i)])];
+        const auto  previous = previous_versions[usize(i)];
+        if (previous != invalid_index && (v.same_storage || storage != invalid_index))
+            roots[usize(root(i))] = root(previous);
         if (storage != invalid_index) {
             auto& first = storage_groups[usize(storage)].first_version;
             if (first == invalid_index)
@@ -605,21 +687,22 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
             else
                 roots[usize(root(i))] = root(first);
         }
-        if (v.inherits && v.previous) {
-            const auto& previous = data.versions[usize(version_index(*v.previous))];
-            if (previous.writer && *previous.writer != *v.writer &&
-                ! edge(pass_index(*previous.writer),
+        if (v.inherits && previous != invalid_index) {
+            const auto& previous_node = data.versions[usize(previous)];
+            if (previous_node.writer && *previous_node.writer != *v.writer &&
+                ! edge(pass_index(*previous_node.writer),
                        pass_index(*v.writer),
                        DependencySource::Contents))
                 return Err(Error { ErrorKind::Limit });
         }
     }
-    for (Index p {}; p < data.passes.len().to_primitive(); ++p)
+    for (Index p {}; p < data.passes.len().to_primitive(); ++p) {
+        auto offset = use_offsets[usize(p)];
         for (const auto& use : data.passes[usize(p)].uses) {
-            auto        v    = version_index(use.version);
+            auto        v    = resolved_uses[offset++];
             const auto& node = data.versions[usize(v)];
             if (use.access == Access::Read) {
-                if (use.requires_contents && ! available(use.version, use.range))
+                if (use.requires_contents && ! available(v, use.range))
                     return Err(Error {
                         ErrorKind::Undefined, data.passes[usize(p)].id, use.version.resource });
                 if (node.writer) {
@@ -632,6 +715,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
                 }
             }
         }
+    }
 
     HashMap<u64, Vec<StorageAccess>> frontiers;
     Vec<Index>                       ordered_versions;
@@ -646,7 +730,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
                                    });
     for (auto v : ordered_versions) {
         const auto& node  = data.versions[usize(v)];
-        auto        r     = resource_index(node.id.resource);
+        auto        r     = version_resources[usize(v)];
         auto        kind  = data.resources[usize(r)].kind;
         auto        key   = u64((Serial(r) << 32) | root(v));
         auto        found = frontiers.get_mut(key);
@@ -677,10 +761,10 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
     Vec<bool> retained_versions;
     retained_versions.resize(data.versions.len(), false);
     for (auto exported : data.exports) {
-        auto r = resource_index(exported.resource), v = version_index(exported);
+        auto r = resource_index(exported.resource), v = lookup.version(r, exported);
         if (r == invalid_index || v == invalid_index)
             return Err(Error { ErrorKind::MissingResource, {}, exported.resource });
-        if (! available(exported, full_range(data.resources[usize(r)])))
+        if (! available(v, full_range(data.resources[usize(r)])))
             return Err(Error { ErrorKind::Undefined, {}, exported.resource });
         retained_versions[usize(v)] = true;
     }
@@ -737,7 +821,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
     }
     for (Index i {}; i < data.versions.len().to_primitive(); ++i) {
         const auto&     node = data.versions[usize(i)];
-        const auto&     r    = data.resources[usize(resource_index(node.id.resource))];
+        const auto&     r    = data.resources[usize(version_resources[usize(i)])];
         VersionLifetime life { .version = node.id,
                                .retained =
                                    r.imported || r.retained || retained_versions[usize(i)] };
@@ -757,12 +841,14 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
     Vec<Group> groups;
     Vec<Index> groups_by_root;
     groups_by_root.resize(data.versions.len(), invalid_index);
-    for (auto p : plan.order)
-        for (const auto& use : data.passes[usize(p)].uses) {
-            auto  v = version_index(use.version), owner = root(v);
+    for (auto p : plan.order) {
+        auto       first = use_offsets[usize(p)];
+        const auto end   = first + data.passes[usize(p)].uses.len();
+        for (; first < end; ++first) {
+            auto  v = resolved_uses[first], owner = root(v);
             auto& group = groups_by_root[usize(owner)];
             if (group == invalid_index) {
-                const auto& r = data.resources[usize(resource_index(use.version.resource))];
+                const auto& r = data.resources[usize(version_resources[usize(v)])];
                 group         = Index(groups.len().to_primitive());
                 groups.push({ invalid_index, r.allocation_class, {} });
             }
@@ -771,7 +857,8 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
             if (value.uses.is_empty() || *value.uses.last().unwrap() != p)
                 value.uses.push(Index(p));
         }
-    Index next_slot {};
+    }
+    Index                    next_slot {};
     HashMap<u64, Vec<Index>> reusable;
     for (usize i {}; i < groups.len(); ++i) {
         auto& group = groups[i];
@@ -783,7 +870,7 @@ auto FrameGraph::analyze(const FrameGraphData& data, const Lookup& lookup, Limit
             auto& tails = **reusable.get_mut(key);
             for (auto& tail : tails) {
                 const auto& previous = groups[usize(tail)];
-                bool safe = true;
+                bool        safe     = true;
                 // Each earlier occupant of this slot precedes its tail transitively.
                 for (auto before : previous.uses) {
                     for (auto after : group.uses)
