@@ -34,7 +34,8 @@ auto version_name(ResourceVersion version) -> String {
 } // namespace vrento::fg
 export namespace vrento::fg
 {
-inline auto graphviz(const FrameGraph& graph) -> String {
+template<typename ResourceLabel>
+auto graphviz(const FrameGraph& graph, ResourceLabel&& label) -> String {
     auto output = "digraph framegraph {\n"_Str;
     for (const auto& pass : graph.passes())
         output.push_str(rstd::format("p{} [shape=box,label=\"{}\\nqueue={}\"];\n",
@@ -51,13 +52,16 @@ inline auto graphviz(const FrameGraph& graph) -> String {
                 first = life.first;
                 last  = life.last;
             }
-        auto id = version_name(version.id);
+        auto        id       = version_name(version.id);
+        const auto& resource = *graph.find_resource(version.id.resource);
+        auto        fallback = resource.name.is_empty() ? label(resource.id) : String {};
+        auto        name     = fallback.is_empty() ? resource.name.as_str() : fallback.as_str();
         output.push_str(
             rstd::format(
                 "{} [shape=ellipse,label=\"{}\\nresource={}\\nversion={}\\nslot={}\\nfirst={} "
                 "last={}\"];\n",
                 id.as_str(),
-                escape_name(graph.find_resource(version.id.resource)->name.as_str()).as_str(),
+                escape_name(name).as_str(),
                 version.id.resource.value,
                 version.id.version,
                 slot,
@@ -100,5 +104,10 @@ inline auto graphviz(const FrameGraph& graph) -> String {
     }
     output.push_str("}\n"_str);
     return output;
+}
+inline auto graphviz(const FrameGraph& graph) -> String {
+    return graphviz(graph, [](ResourceId) {
+        return String {};
+    });
 }
 } // namespace vrento::fg

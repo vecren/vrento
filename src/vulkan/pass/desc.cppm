@@ -23,25 +23,37 @@ struct VulkanPassIO {
         auto             clone() const -> StorageReuse { return { output.clone(), input.clone() }; }
     };
     Vec<StorageReuse> storage;
-    auto              logical() const -> pass::PassIO {
+    struct OutputRules {
+        const pass::ContentRef* reuse {};
+        bool                    available { true };
+    };
+    auto output_rules(fg::ResourceVersion version) const -> OutputRules {
+        OutputRules result;
+        for (const auto& link : storage)
+            if (link.output.version() == version) result.reuse = rstd::addressof(link.input);
+        if (graphics) {
+            const Option<GraphAttachment>* attachments[] { &graphics->color,
+                                                           &graphics->depth,
+                                                           &graphics->resolve };
+            for (auto attachment : attachments)
+                if (*attachment && (**attachment).resource == version.resource &&
+                    (**attachment).version == version.version)
+                    result.available = (**attachment).store == AttachmentStore::Store;
+        }
+        return result;
+    }
+    auto logical() const -> pass::PassIO {
         pass::PassIO result;
+        result.inputs.reserve(inputs.len());
+        result.outputs.reserve(outputs.len());
         for (const auto& use : inputs)
             result.inputs.push({ use.content.clone(), use.range, use.usage != PassUsage::Release });
         for (const auto& use : outputs) {
-            pass::Output output { use.content.clone(), use.range };
-            auto         version = use.content.version();
-            for (const auto& link : storage)
-                if (link.output.version() == version) output.reuse = Some(link.input.clone());
-            if (graphics) {
-                const Option<GraphAttachment>* attachments[] { &graphics->color,
-                                                               &graphics->depth,
-                                                               &graphics->resolve };
-                for (auto attachment : attachments)
-                    if (*attachment && (**attachment).resource == version.resource &&
-                        (**attachment).version == version.version)
-                        output.available = (**attachment).store == AttachmentStore::Store;
-            }
-            result.outputs.push(rstd::move(output));
+            auto rules = output_rules(use.content.version());
+            result.outputs.push({ use.content.clone(),
+                                  use.range,
+                                  rules.reuse ? Some(rules.reuse->clone()) : None(),
+                                  rules.available });
         }
         return result;
     }
@@ -53,7 +65,7 @@ struct VulkanPassIO {
                                    .parameters     = parameters.clone(),
                                    .graphics       = graphics };
         if (! include_uses) return result;
-        auto              append = [&](const VulkanResourceUse& use, GraphAccess access) {
+        auto append = [&](const VulkanResourceUse& use, GraphAccess access) {
             auto version = use.content.version();
             result.uses.push(
                 { version.resource, version.version, access, use.usage, use.stages, use.range });

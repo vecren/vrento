@@ -89,6 +89,16 @@ struct BufferDefinition {
     friend bool operator==(const BufferDefinition&, const BufferDefinition&) = default;
 };
 
+struct BufferIdentity {
+    u32 kind {};
+    u32 detail {};
+    u64 scope {};
+    u64 object {};
+    u64 binding {};
+
+    friend bool operator==(const BufferIdentity&, const BufferIdentity&) = default;
+};
+
 struct BufferRequest {
     String                     name;
     Option<BufferDefinitionId> source;
@@ -96,7 +106,8 @@ struct BufferRequest {
     BufferLifetimeClass        lifetime { BufferLifetimeClass::Retained };
     u64                        content_version { 1 };
     // Versions are local to a content source; replacing it must invalidate uploads.
-    u64 content_identity {};
+    u64                    content_identity {};
+    Option<BufferIdentity> identity;
 
     auto clone() const -> BufferRequest {
         return BufferRequest {
@@ -106,10 +117,39 @@ struct BufferRequest {
             .lifetime         = lifetime,
             .content_version  = content_version,
             .content_identity = content_identity,
+            .identity         = identity,
         };
+    }
+    auto label() const -> String {
+        if (! name.is_empty()) return name.clone();
+        if (! identity) return {};
+        return rstd::format("buffer:{}:{}:{}:{}:{}",
+                            identity->kind,
+                            identity->scope,
+                            identity->object,
+                            identity->detail,
+                            identity->binding);
     }
 };
 
 using BufferResourceRef = ResourceReference<BufferRequest, BufferResourceTag>;
 
 } // namespace vrento::resource
+
+export namespace rstd
+{
+template<>
+struct Impl<hash::Hash, vrento::resource::BufferIdentity>
+    : ImplBase<vrento::resource::BufferIdentity> {
+    template<typename H>
+        requires Impled<H, hash::Hasher>
+    void hash(H& state) const noexcept {
+        const auto& value = this->self();
+        hash::hash_into(value.kind, state);
+        hash::hash_into(value.detail, state);
+        hash::hash_into(value.scope, state);
+        hash::hash_into(value.object, state);
+        hash::hash_into(value.binding, state);
+    }
+};
+} // namespace rstd

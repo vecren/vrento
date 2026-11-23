@@ -73,26 +73,36 @@ struct GraphicsPassResources {
         return { textures.clone(), buffers.clone(), attachments.clone() };
     }
 };
+inline auto graphics_buffer_read(const fg::FrameGraphBuilder& graph,
+                                 const pass::GraphResources&  resources,
+                                 resource::BufferUseHandle    use)
+    -> Result<GraphicsBufferRead, GraphError> {
+    auto entry = resources.buffer(use);
+    if (! entry) return Err(GraphError { GraphErrorKind::MissingResource });
+    auto content = pass::ContentRef::bind(
+        graph, entry->resource.version, None(), Some(entry->definition.clone()));
+    if (content.is_err()) return Err(content.unwrap_err());
+    const auto& definition = entry->definition.definition().definition;
+    auto        kind   = definition.usage == resource::BufferUsage::Vertex    ? PassUsage::Vertex
+                         : definition.usage == resource::BufferUsage::Index   ? PassUsage::Index
+                         : definition.usage == resource::BufferUsage::Storage ? PassUsage::Storage
+                                                                              : PassUsage::Uniform;
+    auto        stages = PassStages::Vertex;
+    if (kind == PassUsage::Uniform || kind == PassUsage::Storage)
+        stages = stages | PassStages::Fragment | PassStages::Geometry;
+    return Ok(GraphicsBufferRead {
+        content.unwrap(), { .size = definition.size.to_primitive() }, kind, stages });
+}
+
 inline auto graphics_buffer_reads(const fg::FrameGraphBuilder&     graph,
                                   const pass::GraphResources&      resources,
                                   slice<resource::BufferUseHandle> uses)
     -> Result<Vec<GraphicsBufferRead>, GraphError> {
     auto reads = Vec<GraphicsBufferRead>::with_capacity(uses.len());
     for (auto use : uses) {
-        auto entry = resources.buffer(use);
-        if (! entry) return Err(GraphError { GraphErrorKind::MissingResource });
-        auto content = pass::ContentRef::bind(
-            graph, entry->resource.version, None(), Some(entry->definition.clone()));
-        if (content.is_err()) return Err(content.unwrap_err());
-        const auto& definition = entry->definition.definition().definition;
-        auto kind   = definition.usage == resource::BufferUsage::Vertex    ? PassUsage::Vertex
-                      : definition.usage == resource::BufferUsage::Index   ? PassUsage::Index
-                      : definition.usage == resource::BufferUsage::Storage ? PassUsage::Storage
-                                                                           : PassUsage::Uniform;
-        auto stages = PassStages::Vertex;
-        if (kind == PassUsage::Uniform || kind == PassUsage::Storage)
-            stages = stages | PassStages::Fragment | PassStages::Geometry;
-        reads.push({ content.unwrap(), { .size = definition.size.to_primitive() }, kind, stages });
+        auto read = graphics_buffer_read(graph, resources, use);
+        if (read.is_err()) return Err(read.unwrap_err());
+        reads.push(read.unwrap());
     }
     return Ok(rstd::move(reads));
 }

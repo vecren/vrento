@@ -53,14 +53,14 @@ struct GraphBuffer {
     resource::BufferResourceRef definition;
 };
 struct TextureBinding {
-    TextureUse        resource;
-    fg::ResourceRange range;
+    TextureUse                   resource;
+    fg::ResourceRange            range;
     resource::TextureResourceRef definition;
     fg::Index                    version_index;
 };
 struct BufferBinding {
-    BufferUse         resource;
-    fg::ResourceRange range;
+    BufferUse                   resource;
+    fg::ResourceRange           range;
     resource::BufferResourceRef definition;
     fg::Index                   version_index;
 };
@@ -105,13 +105,37 @@ struct GraphResourceMap {
     }
 };
 class GraphResources {
-    u64                                       generation_;
-    Vec<GraphTexture>                         textures_;
-    Vec<TextureUse>                           uses_;
-    Vec<GraphBuffer>                          buffers_;
-    HashMap<fg::ResourceId, usize>            textures_by_id_, buffers_by_id_;
-    HashMap<fg::ResourceVersion, usize>       uses_by_version_;
-    HashMap<resource::BufferUseHandle, usize> buffers_by_use_;
+    struct BufferRange {
+        fg::Serial first {};
+        usize      offset {};
+        usize      count {};
+    };
+    u64                                 generation_;
+    Vec<GraphTexture>                   textures_;
+    Vec<TextureUse>                     uses_;
+    Vec<GraphBuffer>                    buffers_;
+    HashMap<fg::ResourceId, usize>      textures_by_id_;
+    HashMap<fg::ResourceVersion, usize> uses_by_version_;
+    Vec<BufferRange>                    buffer_ranges_;
+    HashMap<u64, usize>                 sparse_buffers_;
+
+    auto buffer(fg::ResourceId id) const -> const GraphBuffer* {
+        if (id.generation != generation_.to_primitive()) return nullptr;
+        usize lo {}, hi = buffer_ranges_.len();
+        while (lo < hi) {
+            const auto  mid   = lo + (hi - lo) / usize(2);
+            const auto& range = buffer_ranges_[mid];
+            if (id.value < range.first) {
+                hi = mid;
+            } else {
+                auto offset = id.value - range.first;
+                if (offset < range.count.to_primitive())
+                    return rstd::addressof(buffers_[range.offset + usize(offset)]);
+                lo = mid + usize(1);
+            }
+        }
+        return nullptr;
+    }
 
 public:
     explicit GraphResources(u64 generation): generation_(generation) {}
@@ -167,10 +191,11 @@ public:
         -> Result<empty, fg::Error> {
         if (graph.data().scope != generation_.to_primitive())
             return Err(fg::Error { fg::ErrorKind::Conflict });
+        buffers_.reserve(entries.len());
         for (const auto& entry : entries) {
             if (! entry.definition.valid())
                 return Err(fg::Error { fg::ErrorKind::MissingResource });
-            if (buffers_by_use_.get(entry.handle) || entry.handle.generation != generation_)
+            if (entry.handle.generation != generation_ || buffer(entry.handle))
                 return Err(fg::Error { fg::ErrorKind::Conflict });
             auto id = graph.next_resource_id();
             auto declared =
@@ -181,19 +206,34 @@ public:
                                         .storage = id.value,
                                         .name    = entry.request().name.clone() });
             if (declared.is_err()) return Err(declared.unwrap_err());
-            (void)buffers_by_id_.insert(id, buffers_.len());
-            (void)buffers_by_use_.insert(entry.handle, buffers_.len());
+            if (auto range = buffer_ranges_.last_mut();
+                range && id.value - (*range)->first == (*range)->count.to_primitive())
+                ++(*range)->count;
+            else
+                buffer_ranges_.push({ id.value, buffers_.len(), usize(1) });
+            if (entry.handle.index != rstd::as_cast<u64>(buffers_.len()))
+                (void)sparse_buffers_.insert(entry.handle.index, buffers_.len());
             buffers_.push({ { entry.handle, declared.unwrap() }, entry.definition.clone() });
         }
         return Ok(empty {});
     }
     auto buffer(resource::BufferUseHandle handle) const -> const GraphBuffer* {
-        auto index = buffers_by_use_.get(handle);
+        if (handle.generation != generation_) return nullptr;
+        if (handle.index < rstd::as_cast<u64>(buffers_.len())) {
+            const auto& entry = buffers_[rstd::as_cast<usize>(handle.index)];
+            if (entry.resource.use.index == handle.index) return rstd::addressof(entry);
+        }
+        if (sparse_buffers_.is_empty()) return nullptr;
+        auto index = sparse_buffers_.get(handle.index);
         return index ? rstd::addressof(buffers_[**index]) : nullptr;
     }
     auto version(resource::BufferUseHandle handle) const -> Option<fg::ResourceVersion> {
         auto entry = buffer(handle);
         return entry ? Some(fg::ResourceVersion(entry->resource.version)) : None();
+    }
+    auto buffer_label(fg::ResourceId id) const -> String {
+        auto entry = buffer(id);
+        return entry ? entry->definition.definition().label() : String {};
     }
     auto generation() const -> u64 { return generation_; }
     auto textures() const -> slice<GraphTexture> { return textures_.as_slice(); }
@@ -243,8 +283,8 @@ public:
                 return Err(fg::Error { fg::ErrorKind::Conflict, {}, existing.id });
             return Ok(fg::ResourceVersion { existing.id, 0 });
         }
-        auto           id = graph.next_resource_id();
-        fg::Serial     allocation_class {};
+        auto       id = graph.next_resource_id();
+        fg::Serial allocation_class {};
         if (spec.allocation_family &&
             spec.request().lifetime == resource::TextureLifetimeClass::FrameLocal) {
             for (const auto& entry : textures_) {
@@ -308,10 +348,10 @@ public:
         for (usize i {}; i < indexed.accesses.len(); ++i) {
             const auto& access = indexed.accesses[i];
             if (! access.used()) continue;
-            const auto& life    = indexed.lifetimes[i];
-            auto        version = life.version;
+            const auto& life        = indexed.lifetimes[i];
+            auto        version     = life.version;
             auto        index_value = fg::Index(i.to_primitive());
-            auto        missing = [&] {
+            auto        missing     = [&] {
                 auto pass = graph.passes()[usize(*life.uses.first().unwrap())].id;
                 return Err(fg::Error { fg::ErrorKind::MissingResource, pass, version.resource });
             };
@@ -323,8 +363,8 @@ public:
                                        access.bounds,
                                        plan.textures[**entry].definition.clone(),
                                        index_value });
-            } else if (auto index = buffers_by_id_.get(version.resource)) {
-                auto use   = buffers_[**index].resource.use;
+            } else if (auto buffer = this->buffer(version.resource)) {
+                auto use   = buffer->resource.use;
                 auto entry = buffer_entries.get(use);
                 if (! entry || ! plan.buffers[**entry].definition.valid()) return missing();
                 result.buffers.push({ { use, version },

@@ -112,7 +112,7 @@ public:
         if (! content)
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::MissingContent,
-                .message = rstd::format("buffer content {} unavailable", request.name),
+                .message = rstd::format("buffer content {} unavailable", request.label()),
             });
         auto loaded = (*content)->LoadBuffer(definition);
         if (loaded.is_err()) return Err(loaded.unwrap_err());
@@ -121,7 +121,7 @@ public:
             (bytes.is_zeroed() && bytes.len() != request.definition.size))
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::MissingContent,
-                .message = rstd::format("invalid buffer content range for {}", request.name),
+                .message = rstd::format("invalid buffer content range for {}", request.label()),
             });
         if (reuse) {
             auto queued = QueueWrite((**existing).clone(),
@@ -142,7 +142,7 @@ public:
         if (allocated.is_err()) {
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::BackendFailure,
-                .message = rstd::format("allocate buffer {} failed", request.name.as_str()),
+                .message = rstd::format("allocate buffer {} failed", request.label()),
                 .source  = Some(resource::ResourceErrorSource::Backend(allocated.unwrap_err())),
             });
         }
@@ -222,6 +222,7 @@ public:
         m_pending_uploads.clear();
         m_entries.clear();
         m_names.clear();
+        m_identities.clear();
         m_next_index = u64();
         ++m_generation;
         if (m_generation == u64()) ++m_generation;
@@ -278,8 +279,10 @@ private:
 
     auto Register(resource::BufferResourceRef definition) -> resource::BufferHandle {
         const auto& request = definition.definition();
-        if (request.name.is_empty() || request.definition.size == usize()) return {};
-        auto existing = m_names.get(request.name);
+        if ((! request.identity && request.name.is_empty()) || request.definition.size == usize())
+            return {};
+        auto existing =
+            request.identity ? m_identities.get(*request.identity) : m_names.get(request.name);
         if (existing.is_some()) {
             auto entry = m_entries.get_mut(**existing);
             if (entry.is_none()) return {};
@@ -298,25 +301,28 @@ private:
             .index      = m_next_index++,
             .generation = m_generation,
         };
-        auto name = request.name.clone();
+        if (request.identity)
+            (void)m_identities.insert(*request.identity, handle);
+        else
+            (void)m_names.insert(request.name.clone(), handle);
         (void)m_entries.insert(handle,
                                BufferEntry {
                                    .handle     = handle,
                                    .definition = rstd::move(definition),
                                });
-        (void)m_names.insert(rstd::move(name), handle);
         return handle;
     }
 
     template<typename Value>
     using HandleMap = HashMap<resource::BufferHandle, Value>;
 
-    u64                                     m_generation { 1 };
-    u64                                     m_next_index { 0 };
-    HandleMap<BufferEntry>                  m_entries;
-    HandleMap<Arc<BufferPhysical>>          m_resources;
-    HashMap<String, resource::BufferHandle> m_names;
-    HashMap<u64, PendingBufferUpload>       m_pending_uploads;
+    u64                                                       m_generation { 1 };
+    u64                                                       m_next_index { 0 };
+    HandleMap<BufferEntry>                                    m_entries;
+    HandleMap<Arc<BufferPhysical>>                            m_resources;
+    HashMap<String, resource::BufferHandle>                   m_names;
+    HashMap<resource::BufferIdentity, resource::BufferHandle> m_identities;
+    HashMap<u64, PendingBufferUpload>                         m_pending_uploads;
 };
 
 } // namespace vrento::resource_registry

@@ -52,6 +52,53 @@ TEST(VulkanPassExecution, ReadsIndexedBufferDefinitionsInUseOrder) {
     EXPECT_EQ(graphics_buffer_reads(graph, resources, uses.as_slice()).unwrap_err().kind,
               GraphErrorKind::MissingResource);
 }
+TEST(VulkanPassExecution, KeepsBufferLookupAcrossDenseSparseAndSeparatedImports) {
+    namespace fg       = vrento::fg;
+    namespace resource = vrento::resource;
+    fg::FrameGraphBuilder        graph(90);
+    vrento::pass::GraphResources resources(u64(90));
+    auto                         make_entry = [](u64 index) -> resource::BufferPlanEntry {
+        return { .handle     = { index, u64(90) },
+                 .definition = resource::BufferRequest { .definition = { .size = usize(64) } } };
+    };
+    resource::ResourcePlan plan { .generation = u64(90) };
+    plan.buffers.push(make_entry(u64(0)));
+    plan.buffers.push(make_entry(u64(2)));
+    resources.declare_buffers(graph, plan.buffers.as_slice()).unwrap();
+    auto intervening = graph.next_resource_id();
+    graph.import_resource({ .id = intervening, .kind = fg::ResourceKind::Buffer, .bytes = 32 })
+        .unwrap();
+    auto late = make_entry(u64(1));
+    resources
+        .declare_buffers(graph, slice<resource::BufferPlanEntry>::from_raw_parts(&late, usize(1)))
+        .unwrap();
+    plan.buffers.push(rstd::move(late));
+    ASSERT_EQ(resources.buffers().len(), usize(3));
+    for (const auto& entry : plan.buffers) {
+        auto found = resources.buffer(entry.handle);
+        ASSERT_NE(found, nullptr);
+        EXPECT_EQ(found->definition.id(), entry.definition.id());
+    }
+    auto duplicate = make_entry(u64(2));
+    EXPECT_EQ(resources
+                  .declare_buffers(
+                      graph, slice<resource::BufferPlanEntry>::from_raw_parts(&duplicate, usize(1)))
+                  .unwrap_err()
+                  .kind,
+              fg::ErrorKind::Conflict);
+    EXPECT_EQ(resources.buffer({ u64(0), u64(91) }), nullptr);
+
+    auto pass = graph.reserve_pass_id();
+    graph.add_pass(pass).unwrap();
+    for (const auto& entry : plan.buffers)
+        graph.read(pass, resources.version(entry.handle).unwrap()).unwrap();
+    auto built    = rstd::move(graph).finish().unwrap();
+    auto bindings = resources.bindings(built, plan).unwrap();
+    ASSERT_EQ(bindings.buffers.len(), usize(3));
+    EXPECT_TRUE(bindings.externals.is_empty());
+    for (const auto& entry : bindings.buffers)
+        EXPECT_EQ(entry.definition.id(), resources.buffer(entry.resource.use)->definition.id());
+}
 TEST(VulkanPassExecution, AttachmentLoadsAndStages) {
     VulkanPassData data { .scope = 1 };
     data.resources.push({ .id = { 1, 1 } });
@@ -100,6 +147,41 @@ TEST(VulkanPassExecution, DiscardedOutputIsUnavailable) {
     data.passes.push(texture_sampled_pass({ 2 }, { 1, 1 }, 1));
     rstd_assert(vrento_test::make_pass_set(rstd::move(data)).unwrap_err().kind ==
                 GraphErrorKind::Undefined);
+}
+TEST(VulkanPassExecution, PublishesLoadReadAndDiscardWriteInRegistrationOrder) {
+    namespace fg = vrento::fg;
+    using vrento::pass::ContentRef;
+    fg::FrameGraphBuilder builder(95);
+    auto             initial  = builder.import_resource({ .id = { 1, 95 }, .storage = 1 }).unwrap();
+    auto             pass     = builder.add_pass({ 1 }).unwrap();
+    auto             previous = ContentRef::bind(builder, initial).unwrap();
+    auto             target   = ContentRef::write(builder, pass, previous).unwrap();
+    const auto       written  = target.version();
+    GraphicsDrawDesc draw;
+    draw.resources.attachments.color = Some(GraphicsAttachment {
+        .target   = rstd::move(target),
+        .previous = Some(rstd::move(previous)),
+        .load     = AttachmentLoad::Load,
+        .store    = AttachmentStore::Discard,
+    });
+    auto        input                = declare_input(builder, pass, rstd::move(draw)).unwrap();
+    auto        graph                = rstd::move(builder).finish().unwrap();
+    const auto* output               = graph.find_version(written);
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->previous, Some(initial));
+    EXPECT_FALSE(output->available);
+    EXPECT_TRUE(output->same_storage);
+    auto compiled = input.lower(graph).unwrap();
+    ASSERT_EQ(compiled.uses.len(), usize(2));
+    EXPECT_EQ(compiled.uses[usize()].access, GraphAccess::Read);
+    EXPECT_EQ(compiled.uses[usize()].version, initial.version);
+    EXPECT_EQ(compiled.uses[usize(1)].access, GraphAccess::Write);
+    EXPECT_EQ(compiled.uses[usize(1)].version, written.version);
+    for (const auto& use : compiled.uses) {
+        EXPECT_EQ(use.usage, PassUsage::ColorAttachment);
+        EXPECT_EQ(use.stages, PassStages::Color);
+        EXPECT_EQ(use.range.aspect, 1u);
+    }
 }
 TEST(VulkanPassExecution, AssociationPreservesOriginalDependencies) {
     vrento::fg::FrameGraphBuilder builder(91);

@@ -39,15 +39,23 @@ public:
         auto             execution = uses.execution(id, ! builder);
         Vec<DeclaredUse> declared_uses;
         if (builder) {
-            auto registered = pass::declare_io(
-                *builder, id, { execution.queue.id }, uses.logical(), rstd::move(name));
-            if (registered.is_err()) return Err(registered.unwrap_err());
-            declared_uses.reserve(registered->len());
-            auto append = [&](const VulkanResourceUse& use) {
-                declared_uses.push({ (*registered)[declared_uses.len()], use.usage, use.stages });
-            };
-            for (const auto& input : uses.inputs) append(input);
-            for (const auto& output : uses.outputs) append(output);
+            auto writer =
+                pass::PassIoWriter::begin(*builder, id, { execution.queue.id }, rstd::move(name));
+            if (writer.is_err()) return Err(writer.unwrap_err());
+            declared_uses.reserve(uses.inputs.len() + uses.outputs.len());
+            for (const auto& input : uses.inputs) {
+                auto registered =
+                    writer->read(input.content, input.range, input.usage != PassUsage::Release);
+                if (registered.is_err()) return Err(registered.unwrap_err());
+                declared_uses.push({ registered.unwrap(), input.usage, input.stages });
+            }
+            for (const auto& output : uses.outputs) {
+                auto rules = uses.output_rules(output.content.version());
+                auto registered =
+                    writer->write(output.content, output.range, rules.reuse, rules.available);
+                if (registered.is_err()) return Err(registered.unwrap_err());
+                declared_uses.push({ registered.unwrap(), output.usage, output.stages });
+            }
         } else {
             for (const auto& input : uses.inputs)
                 if (auto source = input.content.resolve(scope); source.is_err())
