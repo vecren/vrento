@@ -227,6 +227,7 @@ struct UniformSource {
     struct Api {
         using Trait = UniformSource;
 
+        // The output interface stays stable for the lifetime of a registered source.
         auto Describe(mut_ref<dyn<UniformBindingSink>> sink) const -> Result<empty, UniformError> {
             return rstd::trait_call<0>(this, sink);
         }

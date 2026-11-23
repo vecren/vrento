@@ -316,7 +316,7 @@ static void BindingRetriesAndOwnsSources() {
         sources.push(rstd::move(bound).unwrap_unchecked());
     }
     rstd_assert(state->destroyed == u32());
-    rstd_assert(state->leases_created == u32(1));
+    rstd_assert(state->leases_created == u32());
     rstd_assert(state->leases_destroyed == u32());
     {
         UniformBinding binding({},
@@ -324,6 +324,7 @@ static void BindingRetriesAndOwnsSources() {
                                rstd::move(sources),
                                ShaderMatrixConvention::ColumnVector,
                                ShaderMatrixAbi::NativeSpirv);
+        rstd_assert(state->leases_created == u32(1));
         FrameContext   frame;
         Resources      resources;
         auto           resource_view = dyn<UniformResourceView>::from_ref(resources);

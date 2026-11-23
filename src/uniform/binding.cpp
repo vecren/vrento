@@ -152,31 +152,33 @@ auto PrepareUniformSource(const UniformBufferLayout& layout, UniformSourceOwner 
         return Err(
             UniformBufferUpdateError { rstd::move(described).unwrap_err_unchecked().message });
     if (bound.outputs.is_empty()) return Ok(None<BoundUniformSource>());
-    bound.lease = bound.source->AcquireBindingLease();
     return Ok(Some(rstd::move(bound)));
+}
+
+UniformBinding::UniformBinding(resource::BufferUseHandle buffer, Arc<UniformBindingPlan> plan)
+    : m_buffer(buffer), m_plan(rstd::move(plan)) {
+    m_base.resize(m_plan->layout.size, u8());
+    m_sources.reserve(m_plan->sources.len());
+    for (const auto& source : m_plan->sources)
+        m_sources.push({ source.as_ref()->AcquireBindingLease(), None() });
 }
 
 UniformBinding::UniformBinding(resource::BufferUseHandle buffer, UniformBufferLayout layout,
                                Vec<BoundUniformSource> sources, ShaderMatrixConvention convention,
                                ShaderMatrixAbi abi)
-    : m_buffer(buffer),
-      m_layout(rstd::move(layout)),
-      m_sources(rstd::move(sources)),
-      m_base(Vec<u8>::with_capacity(m_layout.size)),
-      m_convention(convention),
-      m_abi(abi) {
-    m_base.resize(m_layout.size, u8());
-}
+    : UniformBinding(buffer, Arc<UniformBindingPlan>::make(UniformBindingPlan {
+                                 rstd::move(layout), rstd::move(sources), convention, abi })) {}
 
 auto UniformBinding::SetParameters(slice<UniformParameter> parameters)
     -> Result<empty, UniformBufferUpdateError> {
-    auto data = Vec<u8>::with_capacity(m_layout.size);
-    data.resize(m_layout.size, u8());
+    const auto& plan = *m_plan;
+    auto        data = Vec<u8>::with_capacity(plan.layout.size);
+    data.resize(plan.layout.size, u8());
     for (const auto& parameter : parameters) {
-        for (const auto& slot : m_layout.slots) {
+        for (const auto& slot : plan.layout.slots) {
             if (slot.name.as_str() != parameter.name) continue;
             auto result = SerializeUniformValue(
-                data.as_mut_slice().as_mut_ref(), slot, parameter.value, m_convention, m_abi);
+                data.as_mut_slice().as_mut_ref(), slot, parameter.value, plan.convention, plan.abi);
             if (result.is_err()) return Err(rstd::move(result).unwrap_err_unchecked());
         }
     }
@@ -190,18 +192,20 @@ auto UniformBinding::Update(ref<dyn<UniformUpdateContext>>              context,
     -> Result<empty, UniformBufferUpdateError> {
     auto versions = Vec<u64>::with_capacity(m_sources.len());
     bool changed  = m_dirty;
-    for (auto& source : m_sources) {
-        auto version = source.source->Version(context);
-        changed      = changed || ! source.evaluated || source.version != version;
+    const auto& plan     = *m_plan;
+    for (usize index {}; index < plan.sources.len(); ++index) {
+        auto        version = plan.sources[index].as_ref()->Version(context);
+        const auto& binding = m_sources[index];
+        changed             = changed || ! binding.version || *binding.version != version;
         versions.push(rstd::move(version));
     }
     if (! changed) return Ok(empty {});
     auto data = m_base.clone();
-    for (auto& source : m_sources) {
+    for (const auto& source : plan.sources) {
         SourceValueWriter writer(
-            data.as_mut_slice().as_mut_ref(), m_layout, source, m_convention, m_abi);
+            data.as_mut_slice().as_mut_ref(), plan.layout, source, plan.convention, plan.abi);
         auto sink      = dyn<UniformValueSink>::from_ref(writer);
-        auto evaluated = source.source->Evaluate(context, sink.as_mut_ref());
+        auto evaluated = source.as_ref()->Evaluate(context, sink.as_mut_ref());
         if (evaluated.is_err())
             return Err(
                 UniformBufferUpdateError { rstd::move(evaluated).unwrap_err_unchecked().message });
@@ -210,10 +214,8 @@ auto UniformBinding::Update(ref<dyn<UniformUpdateContext>>              context,
     if (updated.is_err())
         return Err(UniformBufferUpdateError { rstd::move(updated).unwrap_err_unchecked().message });
     // Failed evaluation or upload must leave every source eligible for retry.
-    for (usize index {}; index < m_sources.len(); ++index) {
-        m_sources[index].version   = versions[index];
-        m_sources[index].evaluated = true;
-    }
+    for (usize index {}; index < m_sources.len(); ++index)
+        m_sources[index].version = Some(u64(versions[index]));
     m_dirty = false;
     return Ok(empty {});
 }
