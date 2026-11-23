@@ -73,36 +73,26 @@ struct GraphicsPassResources {
         return { textures.clone(), buffers.clone(), attachments.clone() };
     }
 };
-inline auto
-graphics_buffer_reads(const fg::FrameGraphBuilder& graph, const pass::GraphResources& resources,
-                      const resource::ResourcePlan& plan, slice<resource::BufferUseHandle> uses)
+inline auto graphics_buffer_reads(const fg::FrameGraphBuilder&     graph,
+                                  const pass::GraphResources&      resources,
+                                  slice<resource::BufferUseHandle> uses)
     -> Result<Vec<GraphicsBufferRead>, GraphError> {
-    Vec<GraphicsBufferRead> reads;
+    auto reads = Vec<GraphicsBufferRead>::with_capacity(uses.len());
     for (auto use : uses) {
-        auto version = resources.version(use);
-        if (! version) return Err(GraphError { GraphErrorKind::MissingResource });
-        bool found {};
-        for (const auto& entry : plan.buffers)
-            if (entry.handle == use) {
-                auto content =
-                    pass::ContentRef::bind(graph, *version, None(), Some(entry.definition.clone()));
-                if (content.is_err()) return Err(content.unwrap_err());
-                const auto usage  = entry.request().definition.usage;
-                auto       kind   = usage == resource::BufferUsage::Vertex    ? PassUsage::Vertex
-                                    : usage == resource::BufferUsage::Index   ? PassUsage::Index
-                                    : usage == resource::BufferUsage::Storage ? PassUsage::Storage
-                                                                              : PassUsage::Uniform;
-                auto       stages = PassStages::Vertex;
-                if (kind == PassUsage::Uniform || kind == PassUsage::Storage)
-                    stages = stages | PassStages::Fragment | PassStages::Geometry;
-                reads.push({ content.unwrap(),
-                             { .size = entry.request().definition.size.to_primitive() },
-                             kind,
-                             stages });
-                found = true;
-            }
-        if (! found)
-            return Err(GraphError { GraphErrorKind::MissingResource, {}, version->resource });
+        auto entry = resources.buffer(use);
+        if (! entry) return Err(GraphError { GraphErrorKind::MissingResource });
+        auto content = pass::ContentRef::bind(
+            graph, entry->resource.version, None(), Some(entry->definition.clone()));
+        if (content.is_err()) return Err(content.unwrap_err());
+        const auto& definition = entry->definition.definition().definition;
+        auto kind   = definition.usage == resource::BufferUsage::Vertex    ? PassUsage::Vertex
+                      : definition.usage == resource::BufferUsage::Index   ? PassUsage::Index
+                      : definition.usage == resource::BufferUsage::Storage ? PassUsage::Storage
+                                                                           : PassUsage::Uniform;
+        auto stages = PassStages::Vertex;
+        if (kind == PassUsage::Uniform || kind == PassUsage::Storage)
+            stages = stages | PassStages::Fragment | PassStages::Geometry;
+        reads.push({ content.unwrap(), { .size = definition.size.to_primitive() }, kind, stages });
     }
     return Ok(rstd::move(reads));
 }

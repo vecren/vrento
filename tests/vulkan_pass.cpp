@@ -2,6 +2,8 @@ module;
 #include <rstd/macro.hpp>
 #include <rstd/test/gtest.hpp>
 module vrento;
+import :pass.resources;
+import :resource;
 import :vulkan.renderer;
 import :vulkan.passes.graphics;
 import rstd.test;
@@ -14,6 +16,42 @@ using namespace vrento::vulkan;
 
 namespace vrento_test::vulkan_pass
 {
+TEST(VulkanPassExecution, ReadsIndexedBufferDefinitionsInUseOrder) {
+    namespace resource = vrento::resource;
+    vrento::fg::FrameGraphBuilder  graph(90);
+    vrento::pass::GraphResources   resources(u64(90));
+    resource::BufferUseHandle      vertex { u64(6), u64(90) }, uniform { u64(23), u64(90) };
+    Vec<resource::BufferPlanEntry> entries;
+    entries.push({ .handle     = vertex,
+                   .definition = resource::BufferRequest { .definition = { .size = usize(64) } } });
+    entries.push(
+        { .handle     = uniform,
+          .definition = resource::BufferRequest {
+              .definition = { .size = usize(32), .usage = resource::BufferUsage::Uniform } } });
+    const auto uniform_id = entries[usize(1)].definition.id();
+    resources.declare_buffers(graph, entries.as_slice()).unwrap();
+    entries.clear();
+
+    Vec<resource::BufferUseHandle> uses;
+    uses.push(resource::BufferUseHandle(uniform));
+    uses.push(resource::BufferUseHandle(vertex));
+    auto reads = graphics_buffer_reads(graph, resources, uses.as_slice()).unwrap();
+    ASSERT_EQ(reads.len(), usize(2));
+    EXPECT_EQ(reads[usize()].content.version(), resources.version(uniform).unwrap());
+    EXPECT_EQ(reads[usize()].content.buffer()->id(), uniform_id);
+    EXPECT_EQ(reads[usize()].range.size, 32u);
+    EXPECT_EQ(reads[usize()].usage, PassUsage::Uniform);
+    EXPECT_EQ(reads[usize()].stages,
+              PassStages::Vertex | PassStages::Fragment | PassStages::Geometry);
+    EXPECT_EQ(reads[usize(1)].content.version(), resources.version(vertex).unwrap());
+    EXPECT_EQ(reads[usize(1)].range.size, 64u);
+    EXPECT_EQ(reads[usize(1)].usage, PassUsage::Vertex);
+    EXPECT_EQ(reads[usize(1)].stages, PassStages::Vertex);
+
+    uses.push({ uniform.index, u64(91) });
+    EXPECT_EQ(graphics_buffer_reads(graph, resources, uses.as_slice()).unwrap_err().kind,
+              GraphErrorKind::MissingResource);
+}
 TEST(VulkanPassExecution, AttachmentLoadsAndStages) {
     VulkanPassData data { .scope = 1 };
     data.resources.push({ .id = { 1, 1 } });

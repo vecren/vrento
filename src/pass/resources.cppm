@@ -48,6 +48,10 @@ struct BufferUse {
     resource::BufferUseHandle use;
     fg::ResourceVersion       version;
 };
+struct GraphBuffer {
+    BufferUse                   resource;
+    resource::BufferResourceRef definition;
+};
 struct TextureBinding {
     TextureUse        resource;
     fg::ResourceRange range;
@@ -94,10 +98,10 @@ struct GraphResourceMap {
     }
 };
 class GraphResources {
-    u64               generation_;
-    Vec<GraphTexture> textures_;
-    Vec<TextureUse>   uses_;
-    Vec<BufferUse>    buffers_;
+    u64                                       generation_;
+    Vec<GraphTexture>                         textures_;
+    Vec<TextureUse>                           uses_;
+    Vec<GraphBuffer>                          buffers_;
     HashMap<fg::ResourceId, usize>            textures_by_id_, buffers_by_id_;
     HashMap<fg::ResourceVersion, usize>       uses_by_version_;
     HashMap<resource::BufferUseHandle, usize> buffers_by_use_;
@@ -151,7 +155,7 @@ public:
         if (version.is_err()) return Err(version.unwrap_err());
         return graph.reuse_storage(*version);
     }
-    auto buffers() const -> slice<BufferUse> { return buffers_.as_slice(); }
+    auto buffers() const -> slice<GraphBuffer> { return buffers_.as_slice(); }
     auto declare_buffers(fg::FrameGraphBuilder& graph, slice<resource::BufferPlanEntry> entries)
         -> Result<empty, fg::Error> {
         if (graph.data().scope != generation_.to_primitive())
@@ -161,8 +165,8 @@ public:
                 return Err(fg::Error { fg::ErrorKind::MissingResource });
             if (buffers_by_use_.get(entry.handle) || entry.handle.generation != generation_)
                 return Err(fg::Error { fg::ErrorKind::Conflict });
-            auto           id = graph.next_resource_id();
-            auto           declared =
+            auto id = graph.next_resource_id();
+            auto declared =
                 graph.import_resource({ .id      = id,
                                         .kind    = fg::ResourceKind::Buffer,
                                         .bytes   = entry.request().definition.size.to_primitive(),
@@ -172,13 +176,17 @@ public:
             if (declared.is_err()) return Err(declared.unwrap_err());
             (void)buffers_by_id_.insert(id, buffers_.len());
             (void)buffers_by_use_.insert(entry.handle, buffers_.len());
-            buffers_.push({ entry.handle, declared.unwrap() });
+            buffers_.push({ { entry.handle, declared.unwrap() }, entry.definition.clone() });
         }
         return Ok(empty {});
     }
-    auto version(resource::BufferUseHandle handle) const -> Option<fg::ResourceVersion> {
+    auto buffer(resource::BufferUseHandle handle) const -> const GraphBuffer* {
         auto index = buffers_by_use_.get(handle);
-        return index ? Some(fg::ResourceVersion(buffers_[**index].version)) : None();
+        return index ? rstd::addressof(buffers_[**index]) : nullptr;
+    }
+    auto version(resource::BufferUseHandle handle) const -> Option<fg::ResourceVersion> {
+        auto entry = buffer(handle);
+        return entry ? Some(fg::ResourceVersion(entry->resource.version)) : None();
     }
     auto generation() const -> u64 { return generation_; }
     auto textures() const -> slice<GraphTexture> { return textures_.as_slice(); }
@@ -306,7 +314,7 @@ public:
                 result.textures.push(
                     { texture, access.bounds, plan.textures[**entry].definition.clone() });
             } else if (auto index = buffers_by_id_.get(version.resource)) {
-                auto use   = buffers_[**index].use;
+                auto use   = buffers_[**index].resource.use;
                 auto entry = buffer_entries.get(use);
                 if (! entry || ! plan.buffers[**entry].definition.valid()) return missing();
                 result.buffers.push(
