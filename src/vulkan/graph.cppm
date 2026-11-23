@@ -45,86 +45,146 @@ struct GraphBinding {
     template<class T>
     using Funcs = TraitFuncs<&T::Info, &T::Texture, &T::Use, &T::Freeze, &T::Release>;
 };
-struct GraphBindingEntry {
-    ResourceId                         id;
-    rstd::sync::Arc<dyn<GraphBinding>> binding;
-    Option<GraphIndex>                 version;
-    auto clone() const -> GraphBindingEntry { return { id, binding.clone(), version.clone() }; }
-};
 class GraphBindings {
-    GraphSerial                         scope_;
-    Vec<GraphBindingEntry>              entries_;
-    HashMap<u64, usize>                 values_;
-    HashMap<ResourceId, Vec<usize>>     resources_;
-    HashMap<fg::ResourceVersion, usize> versions_;
+    GraphBindingLayout                              layout_;
+    Vec<Option<rstd::sync::Arc<dyn<GraphBinding>>>> entries_;
 
-    void append(GraphBindingEntry entry) {
-        auto index = entries_.len();
-        if (! values_.contains_key(u64(entry.id.value))) values_.insert(u64(entry.id.value), index);
-        auto group = resources_.get_mut(entry.id);
-        if (group)
-            (*group)->push(usize(index));
-        else {
-            Vec<usize> indices;
-            indices.push(usize(index));
-            resources_.insert(entry.id, rstd::move(indices));
-        }
-        if (entry.version) versions_.insert({ entry.id, *entry.version }, index);
-        entries_.push(rstd::move(entry));
-    }
-    auto locate(ResourceId id, Option<GraphIndex> version = None()) const -> Option<usize> {
-        if (version) {
-            if (auto exact = versions_.get({ id, *version })) return Some(usize(**exact));
-        }
-        auto group = resources_.get(id);
-        if (! group) return None();
-        auto first = (**group)[usize()];
-        if (! entries_[first].version || (! version && (*group)->len() == usize(1)))
-            return Some(first);
-        return None();
-    }
-    auto information() const -> Vec<GraphBindingInfo> {
-        Vec<GraphBindingInfo> result;
-        result.reserve(entries_.len());
-        for (const auto& entry : entries_) result.push(entry.binding->Info());
-        return result;
-    }
     struct SlotCounts {
         usize               total {};
         HashMap<u32, usize> slots;
-        void                add(Option<fg::Index> slot) {
+        void                add(fg::Index slot) {
             ++total;
-            if (! slot) return;
-            if (auto count = slots.get_mut(u32(*slot)))
+            if (slot == fg::invalid_index) return;
+            if (auto count = slots.get_mut(u32(slot)))
                 ++**count;
             else
-                slots.insert(u32(*slot), usize(1));
+                slots.insert(u32(slot), usize(1));
         }
-        auto matches(Option<fg::Index> slot) const -> usize {
-            if (slot)
-                if (auto count = slots.get(u32(*slot))) return **count;
+        auto matches(fg::Index slot) const -> usize {
+            if (slot != fg::invalid_index)
+                if (auto count = slots.get(u32(slot))) return **count;
             return usize();
         }
     };
     struct AliasCounts {
         SlotCounts all, restricted;
-        void       add(Option<fg::Index> slot, bool shared) {
+        void       add(fg::Index slot, bool shared) {
             all.add(slot);
             if (! shared) restricted.add(slot);
         }
     };
     struct AliasGroup {
-        AliasCounts                      counts;
-        HashMap<ResourceId, AliasCounts> resources;
-        void                             add(ResourceId id, Option<fg::Index> slot, bool shared) {
+        AliasCounts                     counts;
+        HashMap<fg::Index, AliasCounts> resources;
+        void                            add(fg::Index resource, fg::Index slot, bool shared) {
             counts.add(slot, shared);
-            if (! resources.contains_key(id)) resources.insert(id, AliasCounts {});
-            resources.get_mut(id).unwrap()->add(slot, shared);
+            if (! resources.contains_key(resource)) resources.insert(resource, AliasCounts {});
+            resources.get_mut(resource).unwrap()->add(slot, shared);
         }
     };
-    auto validate_info(slice<GraphBindingRequirement> resources, const GraphBindingLayout& layout,
-                       const DeviceSession& session, slice<GraphBindingInfo> infos,
-                       bool version_aliases) const -> Result<empty, GraphExecutionError> {
+    auto check_aliases(slice<GraphBindingRequirement> resources,
+                       slice<GraphBindingInfo> infos) const -> Result<empty, GraphExecutionError> {
+        const auto                                   versions = layout_.versions();
+        HashMap<graph_texture::Identity, fg::Index>  owners[2];
+        HashMap<graph_texture::Identity, AliasGroup> aliases[2];
+        struct VersionGroup {
+            HashMap<u32, graph_texture::Identity>       slots;
+            HashMap<graph_texture::Identity, fg::Index> identities;
+        };
+        HashMap<fg::Index, VersionGroup> groups;
+        auto                             check_version = [&](VersionGroup& group, usize i) {
+            const auto allocation        = versions[i].allocation;
+            const auto identity          = infos[i].identity;
+            auto       previous_identity = group.slots.get(u32(allocation));
+            auto       previous_slot     = group.identities.get(identity);
+            if ((previous_identity && **previous_identity != identity) ||
+                (previous_slot && **previous_slot != allocation))
+                return false;
+            group.slots.insert(u32(allocation), identity);
+            group.identities.insert(identity, allocation);
+            return true;
+        };
+        for (usize i {}; i < versions.len(); ++i) {
+            const auto& version = versions[i];
+            if (! version.used) continue;
+            const auto& info = infos[i];
+            const auto  kind  = info.kind == GraphResourceKind::Buffer ? 1 : 0;
+            auto        owner = owners[kind].get(info.identity);
+            if (! owner)
+                owners[kind].insert(info.identity, version.resource);
+            else if (**owner != version.resource && ! aliases[kind].contains_key(info.identity))
+                aliases[kind].insert(info.identity, AliasGroup {});
+            if (version.first_slotted == fg::invalid_index) continue;
+            auto group = groups.get_mut(version.resource);
+            if (! group) {
+                groups.insert(version.resource, VersionGroup {});
+                group = groups.get_mut(version.resource);
+                (void)check_version(**group, usize(version.first_slotted));
+            }
+            if (! check_version(**group, i))
+                return Err(GraphExecutionError {
+                    GraphExecutionStage::Binding, version.first_pass, version.version.resource });
+        }
+        if (aliases[0].is_empty() && aliases[1].is_empty()) return Ok(empty {});
+        for (usize i {}; i < versions.len(); ++i) {
+            const auto& version = versions[i];
+            if (! version.used) continue;
+            const auto& info  = infos[i];
+            auto&       table = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
+            if (auto alias = table.get_mut(info.identity))
+                (*alias)->add(version.resource,
+                              version.allocation,
+                              resources[usize(version.resource)].read_only_import);
+        }
+        for (usize i {}; i < versions.len(); ++i) {
+            const auto& version = versions[i];
+            if (! version.used) continue;
+            const auto& info  = infos[i];
+            const auto& table = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
+            if (auto alias = table.get(info.identity)) {
+                const auto& own    = *(*alias)->resources.get(version.resource).unwrap();
+                const bool  shared = resources[usize(version.resource)].read_only_import;
+                const auto& all    = shared ? (*alias)->counts.restricted : (*alias)->counts.all;
+                const auto& local  = shared ? own.restricted : own.all;
+                if (all.total - local.total !=
+                    all.matches(version.allocation) - local.matches(version.allocation))
+                    return Err(GraphExecutionError { GraphExecutionStage::Binding,
+                                                     version.first_pass,
+                                                     version.version.resource });
+            }
+        }
+        return Ok(empty {});
+    }
+
+public:
+    explicit GraphBindings(const GraphBindingLayout& layout): layout_(layout) {
+        entries_.reserve(layout_.versions().len());
+        for (usize i {}; i < layout_.versions().len(); ++i) entries_.push(None());
+    }
+    bool matches(const GraphBindingLayout& layout) const { return layout_.same_layout(layout); }
+    auto scope() const -> GraphSerial { return layout_.scope(); }
+    auto bind(GraphBindingSlot slot, rstd::sync::Arc<dyn<GraphBinding>> binding)
+        -> Result<empty, GraphExecutionError> {
+        if (usize(slot.index) >= entries_.len())
+            return Err(GraphExecutionError { GraphExecutionStage::Binding });
+        auto& entry = entries_[usize(slot.index)];
+        if (entry) {
+            const auto& version = layout_.versions()[usize(slot.index)];
+            return Err(GraphExecutionError {
+                GraphExecutionStage::Binding, version.first_pass, version.version.resource });
+        }
+        entry = Some(rstd::move(binding));
+        return Ok(empty {});
+    }
+    auto resolve(GraphBindingSlot slot) const [[clang::lifetimebound]]
+    -> Option<ref<dyn<GraphBinding>>> {
+        if (usize(slot.index) >= entries_.len()) return None();
+        const auto& entry = entries_[usize(slot.index)];
+        return entry ? Some((*entry).as_ptr().as_ptr().as_ref()) : None();
+    }
+    auto freeze(const DeviceSession& session, slice<GraphBindingRequirement> resources,
+                graph_texture::Submission* work) && -> Result<GraphBindings, GraphExecutionError> {
+        auto entries = rstd::move(entries_);
         if (! session.valid() || session.lost())
             return Err(GraphExecutionError {
                 GraphExecutionStage::Device,
@@ -132,274 +192,75 @@ class GraphBindings {
                 {},
                 session.lost() ? GraphExecutionCause::Native(VK_ERROR_DEVICE_LOST)
                                : GraphExecutionCause::Reason(GraphFailure::Closed) });
-        HashMap<graph_texture::Identity, ResourceId> owners[2];
-        HashMap<graph_texture::Identity, AliasGroup> aliases[2];
-        const auto                                   shared_import = [&](ResourceId id) {
-            if (! layout.has_allocations()) return false;
-            auto resource = layout.resource(id);
-            return resource && resources[*resource].read_only_import;
-        };
-        // A physical identity needs alias counts only if multiple logical resources use it.
-        for (usize i {}; i < entries_.len(); ++i) {
-            const auto& info = infos[i];
-            if (info.kind != GraphResourceKind::Texture && info.kind != GraphResourceKind::Buffer)
+        auto                  versions = layout_.versions();
+        Vec<GraphBindingInfo> infos;
+        infos.reserve(versions.len());
+        HashSet<graph_texture::Identity> written;
+        for (usize i {}; i < versions.len(); ++i) {
+            const auto& version = versions[i];
+            auto&       entry   = entries[i];
+            if (! version.used) {
+                entry = None();
+                infos.push(GraphBindingInfo {});
                 continue;
-            const auto kind  = info.kind == GraphResourceKind::Buffer ? 1 : 0;
-            const auto id    = entries_[i].id;
-            auto       owner = owners[kind].get(info.identity);
-            if (! owner)
-                owners[kind].insert(info.identity, id);
-            else if (**owner != id && ! aliases[kind].contains_key(info.identity))
-                aliases[kind].insert(info.identity, AliasGroup {});
-        }
-        if (! aliases[0].is_empty() || ! aliases[1].is_empty()) {
-            for (usize i {}; i < entries_.len(); ++i) {
-                const auto& info = infos[i];
-                if (info.kind != GraphResourceKind::Texture &&
-                    info.kind != GraphResourceKind::Buffer)
-                    continue;
-                auto& groups = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-                if (groups.is_empty()) continue;
-                auto alias = groups.get_mut(info.identity);
-                if (! alias) continue;
-                const auto& entry = entries_[i];
-                (*alias)->add(
-                    entry.id, layout.slot(entry.id, entry.version), shared_import(entry.id));
             }
-        }
-        for (const auto& resource : resources) {
-            auto group = resources_.get(resource.id);
-            if (! group)
-                return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
-            for (auto i : **group) {
-                const auto& entry = entries_[i];
-                const auto& info  = infos[i];
-                if (resource.check_revision && (! entry.version || *entry.version == 0) &&
-                    resource.content_revision != info.content_revision)
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
-                if (info.identity.device != session.epoch() ||
-                    info.identity.epoch != session.epoch())
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Device, {}, resource.id });
-                if (info.kind != resource.kind ||
+            const auto id = version.version.resource;
+            if (! entry)
+                return Err(
+                    GraphExecutionError { GraphExecutionStage::Binding, version.first_pass, id });
+            auto info = (*entry)->Info();
+            if (info.identity.device != session.epoch() || info.identity.epoch != session.epoch())
+                return Err(
+                    GraphExecutionError { GraphExecutionStage::Device, version.first_pass, id });
+            if (! resources.is_empty()) {
+                const auto& resource = resources[usize(version.resource)];
+                if ((resource.check_revision && version.version.version == 0 &&
+                     resource.content_revision != info.content_revision) ||
+                    info.kind != resource.kind ||
                     (info.kind == GraphResourceKind::Buffer && resource.bytes > info.bytes) ||
                     (info.kind == GraphResourceKind::Texture &&
                      (resource.mip_levels > info.mip_levels || resource.layers > info.layers ||
                       (resource.aspects & ~info.aspects))))
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
-                const auto& groups = aliases[info.kind == GraphResourceKind::Buffer ? 1 : 0];
-                if (groups.is_empty()) continue;
-                auto alias = groups.get(info.identity);
-                if (! alias) continue;
-                const auto& own        = *(*alias)->resources.get(entry.id).unwrap();
-                const auto  slot       = layout.slot(entry.id, entry.version);
-                const bool  shared     = shared_import(entry.id);
-                const auto& counts     = (*alias)->counts;
-                const auto& all_counts = shared ? counts.restricted : counts.all;
-                const auto& own_counts = shared ? own.restricted : own.all;
-                if (all_counts.total - own_counts.total !=
-                    all_counts.matches(slot) - own_counts.matches(slot))
-                    return Err(
-                        GraphExecutionError { GraphExecutionStage::Binding, {}, resource.id });
-            }
-        }
-        if (version_aliases && layout.has_allocations()) {
-            struct VersionGroup {
-                HashMap<u32, graph_texture::Identity>       slots;
-                HashMap<graph_texture::Identity, fg::Index> identities;
-            };
-            HashMap<ResourceId, VersionGroup> groups;
-            for (usize i {}; i < entries_.len(); ++i) {
-                const auto& entry = entries_[i];
-                if (! entry.version) continue;
-                auto allocation = layout.slot(entry.id, entry.version);
-                if (! allocation) continue;
-                if (! groups.contains_key(entry.id)) groups.insert(entry.id, VersionGroup {});
-                auto& group             = *groups.get_mut(entry.id).unwrap();
-                auto  identity          = infos[i].identity;
-                auto  slot              = *allocation;
-                auto  previous_identity = group.slots.get(u32(slot));
-                auto  previous_slot     = group.identities.get(identity);
-                if ((previous_identity && **previous_identity != identity) ||
-                    (previous_slot && **previous_slot != slot))
-                    return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, entry.id });
-                group.slots.insert(u32(slot), identity);
-                group.identities.insert(identity, slot);
-            }
-        }
-        return Ok(empty {});
-    }
-    auto validate_uses(const VulkanPassSet& graph) const -> Result<empty, GraphExecutionError> {
-        for (const auto& pass : graph.passes())
-            for (const auto& use : pass.uses)
-                if (! locate(use.resource, Some(GraphIndex(use.version))))
                     return Err(GraphExecutionError {
-                        GraphExecutionStage::Binding, pass.id, use.resource });
-        return Ok(empty {});
-    }
-    auto freeze_info(slice<PassExecutionInfo> passes, slice<GraphBindingRequirement> resources,
-                     const GraphBindingLayout* layout, const DeviceSession& session,
-                     graph_texture::Submission* work, slice<GraphBindingInfo> infos) const
-        -> Result<GraphBindings, GraphExecutionError> {
-        Vec<bool> used;
-        used.resize(entries_.len(), false);
-        HashSet<graph_texture::Identity> written;
-        for (const auto& pass : passes)
-            for (const auto& use : pass.uses) {
-                auto index = locate(use.resource, Some(GraphIndex(use.version)));
-                if (! index) continue;
-                used[*index] = true;
-                if (use.access == GraphAccess::Write) written.insert(infos[*index].identity);
+                        GraphExecutionStage::Binding, version.first_pass, id });
             }
-        GraphBindings result(scope_);
-        result.entries_.reserve(entries_.len());
-        for (usize i {}; i < entries_.len(); ++i) {
-            const auto& entry     = entries_[i];
-            bool        read_only = true;
-            if (layout) {
-                auto declared = layout->resource(entry.id);
-                if (! declared) continue;
-                read_only = resources[*declared].imported;
-            } else if (! used[i])
-                continue;
-            read_only = read_only && used[i] && ! written.contains(infos[i].identity);
+            if (version.written) written.insert(info.identity);
+            infos.push(rstd::move(info));
+        }
+        if (! resources.is_empty()) {
+            auto aliases = check_aliases(resources, infos.as_slice());
+            if (aliases.is_err()) return Err(aliases.unwrap_err());
+        }
+        for (usize i {}; i < entries.len(); ++i) {
+            auto& entry = entries[i];
+            if (! entry) continue;
+            const auto& version = versions[i];
+            bool        read_only =
+                (resources.is_empty() || resources[usize(version.resource)].imported) &&
+                ! written.contains(infos[i].identity);
             if (read_only && work) {
-                if (auto view = entry.binding->Texture()) {
+                if (auto view = (*entry)->Texture()) {
                     auto recorded = texture_recorded_in(*work, session, *view);
                     if (recorded.is_err())
                         return Err(GraphExecutionError {
                             GraphExecutionStage::Binding,
-                            layout ? PassId {} : passes[usize()].id,
-                            entry.id,
+                            version.first_pass,
+                            version.version.resource,
                             GraphExecutionCause::Texture(recorded.unwrap_err()) });
                     read_only = ! recorded.unwrap();
                 }
             }
-            auto frozen = entry.binding->Freeze(read_only);
+            auto frozen = (*entry)->Freeze(read_only);
             if (frozen.is_err()) {
                 auto error     = frozen.unwrap_err();
-                error.resource = entry.id;
+                error.resource = version.version.resource;
+                if (! error.pass.value) error.pass = version.first_pass;
                 return Err(rstd::move(error));
             }
-            result.append({ entry.id, frozen.unwrap(), entry.version });
+            entry = Some(frozen.unwrap());
         }
-        return Ok(rstd::move(result));
-    }
-
-public:
-    explicit GraphBindings(GraphSerial scope): scope_(scope) {}
-    auto scope() const -> GraphSerial { return scope_; }
-    auto bind(ResourceId id, rstd::sync::Arc<dyn<GraphBinding>> binding)
-        -> Result<empty, GraphExecutionError> {
-        if (! id.valid() || values_.contains_key(u64(id.value)))
-            return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, id });
-        append({ id, rstd::move(binding) });
-        return Ok(empty {});
-    }
-    auto bind_version(fg::ResourceVersion version, rstd::sync::Arc<dyn<GraphBinding>> binding)
-        -> Result<empty, GraphExecutionError> {
-        auto first = values_.get(u64(version.resource.value));
-        if (! version.resource.valid() || (first && ! entries_[**first].version) ||
-            versions_.contains_key(version))
-            return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        append({ version.resource, rstd::move(binding), Some(version.version) });
-        return Ok(empty {});
-    }
-    auto resolve(ResourceId id) const -> Option<rstd::sync::Arc<dyn<GraphBinding>>> {
-        auto index = locate(id);
-        return index ? Some(entries_[*index].binding.clone())
-                     : None<rstd::sync::Arc<dyn<GraphBinding>>>();
-    }
-    auto resolve(ResourceId id, GraphIndex version) const
-        -> Option<rstd::sync::Arc<dyn<GraphBinding>>> {
-        auto index = locate(id, Some(version));
-        return index ? Some(entries_[*index].binding.clone())
-                     : None<rstd::sync::Arc<dyn<GraphBinding>>>();
-    }
-    auto clone() const -> GraphBindings {
-        GraphBindings result(scope_);
-        result.entries_.reserve(entries_.len());
-        for (const auto& entry : entries_) result.append(entry.clone());
-        return result;
-    }
-    auto descriptions() const -> Vec<GraphBindingRequirement> {
-        Vec<GraphBindingRequirement> result;
-        for (usize i {}; i < entries_.len(); ++i) {
-            const auto& entry = entries_[i];
-            if ((**resources_.get(entry.id))[usize()] != i) continue;
-            auto info = entry.binding->Info();
-            result.push({ entry.id,
-                          info.kind,
-                          info.bytes,
-                          info.mip_levels,
-                          info.layers,
-                          info.aspects,
-                          true,
-                          info.content_revision,
-                          true,
-                          ! entry.version });
-        }
-        return result;
-    }
-    auto freeze_pass(const PassExecutionInfo& pass, const DeviceSession& session,
-                     graph_texture::Submission& work) const
-        -> Result<GraphBindings, GraphExecutionError> {
-        auto infos = information();
-        return freeze_info(
-            slice<PassExecutionInfo>::from_raw_parts(rstd::addressof(pass), usize(1)),
-            {},
-            nullptr,
-            session,
-            &work,
-            infos.as_slice());
-    }
-    auto freeze(const VulkanPassSet& graph, const DeviceSession& session,
-                graph_texture::Submission* work = nullptr) const
-        -> Result<GraphBindings, GraphExecutionError> {
-        auto infos = information();
-        return freeze_info(graph.passes(),
-                           graph.resources(),
-                           &graph.binding_layout(),
-                           session,
-                           work,
-                           infos.as_slice());
-    }
-    auto validate_resources(slice<GraphBindingRequirement> resources, const DeviceSession& session,
-                            slice<fg::AllocationSlot> allocations = {}) const
-        -> Result<empty, GraphExecutionError> {
-        GraphBindingLayout layout(resources, allocations);
-        auto               infos = information();
-        return validate_info(resources, layout, session, infos.as_slice(), false);
-    }
-    auto validate(const VulkanPassSet& graph, const DeviceSession& session) const
-        -> Result<empty, GraphExecutionError> {
-        if (scope_ != graph.scope())
-            return Err(GraphExecutionError { GraphExecutionStage::Binding });
-        auto infos   = information();
-        auto checked = validate_info(
-            graph.resources(), graph.binding_layout(), session, infos.as_slice(), true);
-        if (checked.is_err()) return checked;
-        return validate_uses(graph);
-    }
-    auto prepare(const VulkanPassSet& graph, const DeviceSession& session,
-                 graph_texture::Submission* work = nullptr) const
-        -> Result<GraphBindings, GraphExecutionError> {
-        if (scope_ != graph.scope())
-            return Err(GraphExecutionError { GraphExecutionStage::Binding });
-        auto infos   = information();
-        auto checked = validate_info(
-            graph.resources(), graph.binding_layout(), session, infos.as_slice(), true);
-        if (checked.is_err()) return Err(checked.unwrap_err());
-        auto uses = validate_uses(graph);
-        if (uses.is_err()) return Err(uses.unwrap_err());
-        return freeze_info(graph.passes(),
-                           graph.resources(),
-                           &graph.binding_layout(),
-                           session,
-                           work,
-                           infos.as_slice());
+        entries_ = rstd::move(entries);
+        return Ok(rstd::move(*this));
     }
 };
 inline auto graph_stages(PassStages stages) -> graph_texture::Stages {
@@ -626,25 +487,9 @@ struct GraphRecordContext {
     const PassExecutionInfo&                            pass;
     graph_texture::Submission&                          submission;
     Option<rstd::sync::Arc<dyn<PreparedGraphicsScope>>> scope;
-    auto texture(ResourceId id) const -> Option<graph_texture::TextureViewRef> {
-        Option<GraphIndex> version;
-        for (const auto& use : pass.uses)
-            if (use.resource == id) {
-                if (version && *version != use.version) return None();
-                version = Some(GraphIndex(use.version));
-            }
-        if (! version) return None();
-        auto bound = bindings.resolve(id, *version);
+    auto texture(GraphBindingSlot slot) const -> Option<graph_texture::TextureViewRef> {
+        auto bound = bindings.resolve(slot);
         return bound.is_some() ? (*bound)->Texture() : None<graph_texture::TextureViewRef>();
-    }
-    auto texture_version(fg::ResourceVersion version) const
-        -> Option<graph_texture::TextureViewRef> {
-        for (const auto& use : pass.uses)
-            if (use.resource == version.resource && use.version == version.version) {
-                auto bound = bindings.resolve(version.resource, version.version);
-                return bound ? (*bound)->Texture() : None<graph_texture::TextureViewRef>();
-            }
-        return None();
     }
 };
 struct GraphicsScopeBackend {
@@ -744,7 +589,7 @@ inline auto record_pass_access(const PassExecutionInfo& pass, const GraphBinding
     for (unsigned writing {}; writing < 2; ++writing)
         for (const auto& use : pass.uses) {
             if ((use.access == GraphAccess::Write) != bool(writing)) continue;
-            auto binding = bindings.resolve(use.resource, use.version);
+            auto binding = bindings.resolve(use.binding);
             if (binding.is_none())
                 return Err(
                     GraphExecutionError { GraphExecutionStage::Binding, pass.id, use.resource });
@@ -823,7 +668,8 @@ inline auto record_prepared_pass(const DeviceSession& session, const PassExecuti
                                                        &pass.graphics->resolve };
         for (const auto* attachment : attachments) {
             if (attachment->is_none() || (**attachment).store != AttachmentStore::Discard) continue;
-            auto binding = bindings.resolve((**attachment).resource, (**attachment).version);
+            auto binding = bindings.resolve((**attachment).binding);
+            if (! binding) return fail(GraphExecutionError { GraphExecutionStage::Binding });
             auto view    = (*binding)->Texture();
             if (view.is_none()) return fail(GraphExecutionError { GraphExecutionStage::Binding });
             auto discarded = discard_texture_contents(work, session, *view);
@@ -838,8 +684,8 @@ inline auto record_prepared_pass(const DeviceSession& session, const PassExecuti
     return Ok(empty {});
 }
 template<typename Backends>
-inline auto record_vulkan_pass(DeviceSession session, PassExecutionInfo pass,
-                               const GraphBindings& bindings, Backends& backends,
+inline auto record_vulkan_pass(DeviceSession session, const PassExecutionInfo& pass,
+                               GraphBindings bindings, Backends& backends,
                                graph_texture::Submission& work)
     -> Result<FrameProgress, GraphExecutionError> {
     auto fail = [&](GraphExecutionError error) -> Result<FrameProgress, GraphExecutionError> {
@@ -847,20 +693,47 @@ inline auto record_vulkan_pass(DeviceSession session, PassExecutionInfo pass,
         work.discard();
         return Err(rstd::move(error));
     };
-    auto resources = bindings.descriptions();
-    auto valid     = validate_pass_execution(pass, resources.as_slice());
+    GraphBindingRequirement                      requirement;
+    HashMap<graph_texture::Identity, ResourceId> owners[2];
+    for (const auto& use : pass.uses) {
+        auto binding = bindings.resolve(use.binding);
+        if (! binding)
+            return fail(
+                GraphExecutionError { GraphExecutionStage::Binding, pass.id, use.resource });
+        auto  info  = (*binding)->Info();
+        auto& table = owners[info.kind == GraphResourceKind::Buffer ? 1 : 0];
+        if (auto owner = table.get(info.identity)) {
+            if (**owner != use.resource)
+                return fail(
+                    GraphExecutionError { GraphExecutionStage::Binding, pass.id, use.resource });
+        } else {
+            table.insert(info.identity, use.resource);
+        }
+    }
+    auto valid = check_pass_execution(
+        pass,
+        {},
+        [&](const PassResourceUse& use) {
+            auto info   = bindings.resolve(use.binding).unwrap()->Info();
+            requirement = { use.resource, info.kind,    info.bytes, info.mip_levels,
+                            info.layers,  info.aspects, true };
+            return &requirement;
+        },
+        [](fg::ResourceVersion) {
+            return fg::invalid_index;
+        });
     if (valid.is_err())
         return fail(
             GraphExecutionError { GraphExecutionStage::Graph,
                                   {},
                                   {},
                                   vrento::vulkan::GraphExecutionCause::Graph(valid.unwrap_err()) });
-    auto checked = bindings.validate_resources(resources.as_slice(), session);
-    if (checked.is_err()) return fail(checked.unwrap_err());
+    auto frozen = rstd::move(bindings).freeze(session, {}, &work);
+    if (frozen.is_err()) return fail(frozen.unwrap_err());
     auto flags = session.device().graphics_queue().flags;
     if (pass.queue.capability == QueueClass::Compute && ! (flags & VK_QUEUE_COMPUTE_BIT))
         return fail(GraphExecutionError { GraphExecutionStage::Unsupported });
-    GraphPrepareContext context { session, bindings };
+    GraphPrepareContext context { session, *frozen };
     if (pass.graphics) {
         auto scope = backends.prepare_scope(*pass.graphics, context);
         if (scope.is_err()) return fail(scope.unwrap_err());
@@ -877,9 +750,9 @@ inline auto record_vulkan_pass(DeviceSession session, PassExecutionInfo pass,
     };
     if (! prepared->ready()) return Ok(FrameProgress::Pending);
     auto instance = prepared->take_ready();
-    work.retain(Lease { session, bindings.clone(), instance.clone(), context.scope.clone() });
-    auto recorded = record_prepared_pass(session, pass, bindings, instance, context.scope, work);
+    auto recorded = record_prepared_pass(session, pass, *frozen, instance, context.scope, work);
     if (recorded.is_err()) return Err(recorded.unwrap_err());
+    work.retain(Lease { session, frozen.unwrap(), instance.clone(), context.scope.clone() });
     return Ok(FrameProgress::Ready);
 }
 inline auto merge_graphics(const PassExecutionInfo& previous, const PassExecutionInfo& next)
@@ -944,11 +817,12 @@ public:
     PreparedGraphProgram(const PreparedGraphProgram& other): data_(other.data_.clone()) {}
     PreparedGraphProgram(PreparedGraphProgram&&)                           = default;
     auto        operator=(PreparedGraphProgram&&) -> PreparedGraphProgram& = default;
-    static auto begin_prepare(DeviceSession session, VulkanPassSet graph,
-                              const GraphBindings& bindings, bool merge_scopes = true,
-                              graph_texture::Submission* work = nullptr)
+    static auto begin_prepare(DeviceSession session, VulkanPassSet graph, GraphBindings bindings,
+                              bool merge_scopes = true, graph_texture::Submission* work = nullptr)
         -> Result<PreparedGraphProgram, GraphExecutionError> {
-        auto frozen = bindings.prepare(graph, session, work);
+        if (! bindings.matches(graph.binding_layout()))
+            return Err(GraphExecutionError { GraphExecutionStage::Binding });
+        auto frozen = rstd::move(bindings).freeze(session, graph.resources(), work);
         if (frozen.is_err()) return Err(frozen.unwrap_err());
         auto data = rstd::sync::Arc<Data>::make(rstd::move(session),
                                                 rstd::move(graph),
@@ -1025,12 +899,12 @@ public:
         }
         return Ok(FrameProgress::Ready);
     }
-    static auto prepare(DeviceSession session, VulkanPassSet graph, const GraphBindings& bindings,
+    static auto prepare(DeviceSession session, VulkanPassSet graph, GraphBindings bindings,
                         VulkanPassBackends& backends, bool merge_scopes = true,
                         graph_texture::Submission* work = nullptr)
         -> Result<PreparedGraphProgram, GraphExecutionError> {
-        auto started =
-            begin_prepare(rstd::move(session), rstd::move(graph), bindings, merge_scopes, work);
+        auto started = begin_prepare(
+            rstd::move(session), rstd::move(graph), rstd::move(bindings), merge_scopes, work);
         if (started.is_err()) return Err(started.unwrap_err());
         auto program  = started.unwrap();
         auto advanced = program.continue_prepare(backends);
@@ -1041,12 +915,8 @@ public:
     auto scope_count() const -> usize { return data_->scope_count; }
     auto description() const -> const VulkanPassSet& { return data_->graph; }
     auto schedule() const -> const GraphExecutionPlan& { return data_->plan; }
-    auto binding(ResourceId id) const -> Option<rstd::sync::Arc<dyn<GraphBinding>>> {
-        return data_->bindings.resolve(id);
-    }
-    auto binding_version(fg::ResourceVersion version) const
-        -> Option<rstd::sync::Arc<dyn<GraphBinding>>> {
-        return data_->bindings.resolve(version.resource, version.version);
+    auto binding(GraphBindingSlot slot) const -> Option<ref<dyn<GraphBinding>>> {
+        return data_->bindings.resolve(slot);
     }
     auto record_batch(usize batch, graph_texture::Submission& work) const
         -> Result<empty, GraphExecutionError> {

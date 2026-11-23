@@ -344,8 +344,7 @@ auto SurfaceTransferBackend::Prepare(const PassExecutionInfo&   pass,
         pass.uses[usize()].access != GraphAccess::Read ||
         pass.uses[usize(1)].access != GraphAccess::Write)
         return Err(GraphExecutionError { GraphExecutionStage::Schema, pass.id });
-    auto binding =
-        context.bindings.resolve(pass.uses[usize()].resource, pass.uses[usize()].version);
+    auto binding = context.bindings.resolve(pass.uses[usize()].binding);
     if (! binding) return Err(GraphExecutionError { GraphExecutionStage::Binding, pass.id });
     auto source = (*binding)->Texture();
     if (! source || source->description().range.aspect != texture::Aspect::Color ||

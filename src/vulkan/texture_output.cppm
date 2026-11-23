@@ -205,7 +205,6 @@ public:
     auto capture(const CompiledGraph& compiled, ResourceId logical_surface, PassId output,
                  PassId release, SurfaceTarget target, Arc<GraphicsScopeCache> scopes) const
         -> Result<GraphFrameRequest, GraphExecutionError> {
-        auto        scope   = compiled.description().scope();
         const auto& lease   = target.lease();
         auto        invalid = [] {
             return Err(GraphExecutionError { GraphExecutionStage::Binding });
@@ -219,7 +218,7 @@ public:
         auto& resources = **resources_;
         scopes->collect();
         GraphFrameRequest request {
-            .bindings = GraphBindings(scope),
+            .bindings = compiled.make_bindings(),
             .scopes   = Box<dyn<GraphicsScopeBackend>>::make(
                 SurfaceScopeBackend(logical_surface, lease, target.owner(), rstd::move(scopes)))
         };
@@ -237,11 +236,11 @@ public:
             const auto& desc = **found;
             auto        slot = compiled.description().frame_graph().pass_slot(id);
             for (const auto& use : compiled.description().passes()[usize(slot)].uses) {
-                if (request.bindings.resolve(use.resource, use.version)) continue;
-                auto bound = request.bindings.bind_version({ use.resource, use.version },
-                                                           use.resource == logical_surface
-                                                               ? surface_binding.clone()
-                                                               : source_binding.clone());
+                if (request.bindings.resolve(use.binding)) continue;
+                auto bound =
+                    request.bindings.bind(use.binding,
+                                          use.resource == logical_surface ? surface_binding.clone()
+                                                                          : source_binding.clone());
                 if (bound.is_err()) return Err(bound.unwrap_err());
             }
             if (desc.execution().id == output && graphics()) {

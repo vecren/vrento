@@ -401,22 +401,22 @@ TEST(RegistryTextureContext, UploadBeforeGraphKeepsDescriptionsAndRequiresSameSu
     Vec<vk::PassInput> descriptions;
     descriptions.push(copy.description.clone());
     renderer.compile(graph, rstd::move(descriptions)).unwrap();
-    vk::GraphBindings bindings(graph.scope());
+    auto bindings = renderer.compiled()->make_bindings();
     bindings
-        .bind_version(input,
-                      Arc<dyn<vk::GraphBinding>>::make(
-                          vk::GraphTextureBinding(source.allocation->Slots()[usize()].view)))
+        .bind({ graph.version_index(input) },
+              Arc<dyn<vk::GraphBinding>>::make(
+                  vk::GraphTextureBinding(source.allocation->Slots()[usize()].view)))
         .unwrap();
     bindings
-        .bind_version(copy.output,
-                      Arc<dyn<vk::GraphBinding>>::make(
-                          vk::GraphTextureBinding(target.allocation->Slots()[usize()].view)))
+        .bind({ graph.version_index(copy.output) },
+              Arc<dyn<vk::GraphBinding>>::make(
+                  vk::GraphTextureBinding(target.allocation->Slots()[usize()].view)))
         .unwrap();
     auto work = textures.Context().Begin().unwrap();
     ASSERT_TRUE(textures.RecordPendingUploads(work));
     auto frame =
         renderer.compiled()
-            ->instantiate(bindings,
+            ->instantiate(rstd::move(bindings),
                           {},
                           Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}),
                           true,

@@ -64,6 +64,8 @@ class Renderer {
         }
         Vec<CompiledGraph::Entry>             entries;
         Option<Arc<GraphicsCompileResources>> resources;
+        Option<PassExecutionInfo>             standalone_pass;
+        Option<GraphBindingLayout>            standalone_layout;
     };
     Option<PendingCompile> pending_;
     Option<CompiledGraph>  compiled_;
@@ -111,7 +113,7 @@ public:
         const auto&            plan = graph.inspect();
         for (usize i {}; i < plan.accesses.len(); ++i)
             if (plan.accesses[i].used())
-                mapping.externals.push(fg::ResourceVersion(plan.lifetimes[i].version));
+                mapping.externals.push({ plan.lifetimes[i].version, fg::Index(i.to_primitive()) });
         auto input =
             GraphInput::create(rstd::move(graph), rstd::move(descriptions), rstd::move(mapping));
         if (input.is_err()) {
@@ -243,10 +245,17 @@ public:
                 GraphExecutionError { GraphExecutionStage::Schema, description.execution().id }));
             return Err(failed.unwrap_err());
         }
+        auto           pass   = description.execution().clone();
+        auto           layout = GraphBindingLayout::for_pass(description.scope(), pass);
         Vec<PassInput> descriptions;
         descriptions.push(rstd::move(description));
-        pending_ = Some(
-            PendingCompile { None(), None(), rstd::move(descriptions), {}, rstd::move(resources) });
+        pending_    = Some(PendingCompile { None(),
+                                            None(),
+                                            rstd::move(descriptions),
+                                            {},
+                                            rstd::move(resources),
+                                            Some(rstd::move(pass)),
+                                            Some(rstd::move(layout)) });
         auto result = finish_compile(advance_compile());
         if (result.is_err()) return Err(result.unwrap_err());
         if (*result == CompileProgress::Pending) return Ok(PendingPreparation {});
@@ -278,7 +287,7 @@ private:
                         pending.graph
                             ? pending.graph->passes()[usize(
                                   pending.graph->frame_graph().pass_slot(desc.execution().id))]
-                            : desc.execution();
+                            : *pending.standalone_pass;
                     auto result = entry.factory->Compile(desc, pass, context);
                     if (result.is_err()) {
                         auto error = result.unwrap_err();
@@ -319,13 +328,15 @@ private:
             if (result.is_err()) return Err(result.unwrap_err());
             compiled_ = Some(result.unwrap());
         } else {
-            compiled_pass_.insert(
-                CompiledPass(Arc<CompiledPass::Data>::make(session_,
-                                                           rstd::move(pending.standalone[usize()]),
-                                                           pending.entries[usize()].native.clone(),
-                                                           pending.entries[usize()].factory.clone(),
-                                                           pending.resources.clone(),
-                                                           execution_.clone())));
+            compiled_pass_.insert(CompiledPass(
+                Arc<CompiledPass::Data>::make(session_,
+                                              rstd::move(pending.standalone[usize()]),
+                                              pending.standalone_pass.take().unwrap(),
+                                              pending.standalone_layout.take().unwrap(),
+                                              pending.entries[usize()].native.clone(),
+                                              pending.entries[usize()].factory.clone(),
+                                              pending.resources.clone(),
+                                              execution_.clone())));
         }
         pending_ = None();
         return Ok(CompileProgress::Ready);

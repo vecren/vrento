@@ -92,8 +92,8 @@ auto TextureTransferBackend::Prepare(const PassExecutionInfo&   pass,
         read.usage != PassUsage::Transfer || write.usage != PassUsage::Transfer ||
         read.range.mip_count != 1 || read.range.layer_count != write.range.layer_count)
         return unsupported();
-    auto src = context.bindings.resolve(read.resource, read.version).unwrap()->Texture();
-    auto dst = context.bindings.resolve(write.resource, write.version).unwrap()->Texture();
+    auto src = context.bindings.resolve(read.binding).unwrap()->Texture();
+    auto dst = context.bindings.resolve(write.binding).unwrap()->Texture();
     if (! src || ! dst) return unsupported();
     auto source = src->description().range, target = dst->description().range;
     source.first_mip += read.range.first_mip;

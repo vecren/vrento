@@ -85,16 +85,21 @@ class CompiledPass {
     struct Data {
         DeviceSession                         session;
         PassInput                             description;
+        PassExecutionInfo                     pass;
+        GraphBindingLayout                    layout;
         Arc<dyn<VulkanPass>>                  native;
         Arc<dyn<PassFactory>>                 factory;
         Option<Arc<GraphicsCompileResources>> resources;
         Arc<ExecutionCounters>                execution;
         Arc<PassBindingOwner>                 identity { Arc<PassBindingOwner>::make() };
-        Data(DeviceSession device, PassInput desc, Arc<dyn<VulkanPass>> implementation,
+        Data(DeviceSession device, PassInput desc, PassExecutionInfo lowered,
+             GraphBindingLayout binding_layout, Arc<dyn<VulkanPass>> implementation,
              Arc<dyn<PassFactory>> factory_owner, Option<Arc<GraphicsCompileResources>> context,
              Arc<ExecutionCounters> counters)
             : session(rstd::move(device)),
               description(rstd::move(desc)),
+              pass(rstd::move(lowered)),
+              layout(rstd::move(binding_layout)),
               native(rstd::move(implementation)),
               factory(rstd::move(factory_owner)),
               resources(rstd::move(context)),
@@ -123,7 +128,9 @@ public:
                                    data_->native.clone(),
                                    rstd::move(binding)));
     }
-    auto record(const GraphBindings&, Option<PassFrameBinding>, Box<dyn<GraphicsScopeBackend>>,
+    auto binding_layout() const -> const GraphBindingLayout& { return data_->layout; }
+    auto make_bindings() const -> GraphBindings { return GraphBindings(data_->layout); }
+    auto record(GraphBindings, Option<PassFrameBinding>, Box<dyn<GraphicsScopeBackend>>,
                 texture::Submission&) const -> Result<FrameProgress, GraphExecutionError>;
 };
 
@@ -183,6 +190,9 @@ public:
     CompiledGraph(CompiledGraph&&)                    = default;
     auto operator=(CompiledGraph&&) -> CompiledGraph& = default;
     auto description() const -> const VulkanPassSet& { return data_->graph; }
+    auto make_bindings() const -> GraphBindings {
+        return GraphBindings(data_->graph.binding_layout());
+    }
     auto description(PassId id) const -> Option<ref<PassInput>> {
         auto slot = data_->graph.frame_graph().pass_slot(id);
         if (slot == fg::invalid_index) return None();
@@ -212,11 +222,10 @@ public:
                                    entry.native.clone(),
                                    rstd::move(binding)));
     }
-    auto prepare_frame(const GraphBindings&, slice<PassFrameBinding>,
-                       Box<dyn<GraphicsScopeBackend>>, bool merge_scopes = true,
-                       texture::Submission* work = nullptr) const
+    auto prepare_frame(GraphBindings, slice<PassFrameBinding>, Box<dyn<GraphicsScopeBackend>>,
+                       bool merge_scopes = true, texture::Submission* work = nullptr) const
         -> Result<GraphPreparation, GraphExecutionError>;
-    auto instantiate(const GraphBindings&, slice<PassFrameBinding>, Box<dyn<GraphicsScopeBackend>>,
+    auto instantiate(GraphBindings, slice<PassFrameBinding>, Box<dyn<GraphicsScopeBackend>>,
                      bool merge_scopes = true, texture::Submission* work = nullptr) const
         -> Result<Preparation<PreparedGraphProgram>, GraphExecutionError>;
 };
@@ -323,24 +332,22 @@ public:
     }
 };
 
-auto CompiledPass::record(const GraphBindings& bindings, Option<PassFrameBinding> input,
+auto CompiledPass::record(GraphBindings bindings, Option<PassFrameBinding> input,
                           Box<dyn<GraphicsScopeBackend>> scopes, texture::Submission& work) const
     -> Result<FrameProgress, GraphExecutionError> {
     data_->execution->frame();
     const auto& desc = data_->description;
-    const auto& pass = desc.execution();
-    if (desc.scope() != bindings.scope() ||
+    const auto& pass = data_->pass;
+    if (! bindings.matches(data_->layout) ||
         (input &&
          (! Arc<PassBindingOwner>::ptr_eq(input->owner_, data_->identity) ||
           input->slot_ != usize() || input->id_ != pass.id || input->revision_ != desc.revision() ||
           ! Arc<dyn<VulkanPass>>::ptr_eq(input->pass_, data_->native))))
         return Err(GraphExecutionError { GraphExecutionStage::Schema, pass.id });
     StandaloneFrameBackend backend { data_.clone(), rstd::move(input), rstd::move(scopes) };
-    auto                   frozen = bindings.freeze_pass(pass, data_->session, work);
-    if (frozen.is_err()) return Err(frozen.unwrap_err());
-    return record_vulkan_pass(data_->session, pass.clone(), frozen.unwrap(), backend, work);
+    return record_vulkan_pass(data_->session, pass, rstd::move(bindings), backend, work);
 }
-auto CompiledGraph::prepare_frame(const GraphBindings& bindings, slice<PassFrameBinding> inputs,
+auto CompiledGraph::prepare_frame(GraphBindings bindings, slice<PassFrameBinding> inputs,
                                   Box<dyn<GraphicsScopeBackend>> scopes, bool merge_scopes,
                                   texture::Submission* work) const
     -> Result<GraphPreparation, GraphExecutionError> {
@@ -358,17 +365,18 @@ auto CompiledGraph::prepare_frame(const GraphBindings& bindings, slice<PassFrame
         slots[input.slot_] = Some(input.clone());
     }
     auto started = PreparedGraphProgram::begin_prepare(
-        data_->session, data_->graph, bindings, merge_scopes, work);
+        data_->session, data_->graph, rstd::move(bindings), merge_scopes, work);
     if (started.is_err()) return Err(started.unwrap_err());
     return Ok(GraphPreparation(
         started.unwrap(),
         NativeFrameBackend { data_.clone(), rstd::move(slots), rstd::move(scopes) }));
 }
-auto CompiledGraph::instantiate(const GraphBindings& bindings, slice<PassFrameBinding> inputs,
+auto CompiledGraph::instantiate(GraphBindings bindings, slice<PassFrameBinding> inputs,
                                 Box<dyn<GraphicsScopeBackend>> scopes, bool merge_scopes,
                                 texture::Submission* work) const
     -> Result<Preparation<PreparedGraphProgram>, GraphExecutionError> {
-    auto started = prepare_frame(bindings, inputs, rstd::move(scopes), merge_scopes, work);
+    auto started =
+        prepare_frame(rstd::move(bindings), inputs, rstd::move(scopes), merge_scopes, work);
     if (started.is_err()) return Err(started.unwrap_err());
     auto preparation = started.unwrap();
     auto result      = preparation.advance();

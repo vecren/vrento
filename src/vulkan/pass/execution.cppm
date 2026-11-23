@@ -64,6 +64,11 @@ struct GraphBindingRequirement {
     bool              fixed_storage { true };
     bool              read_only_import {};
 };
+struct GraphBindingSlot {
+    fg::Index   index { fg::invalid_index };
+    auto        valid() const -> bool { return index != fg::invalid_index; }
+    friend bool operator==(GraphBindingSlot, GraphBindingSlot) = default;
+};
 struct PassResourceUse {
     ResourceId  resource;
     GraphIndex  version {};
@@ -72,6 +77,7 @@ struct PassResourceUse {
     PassStages  stages { PassStages::Fragment };
     GraphRange  range;
     GraphSerial logical_use {};
+    GraphBindingSlot binding;
     friend bool operator==(const PassResourceUse&, const PassResourceUse&) = default;
 };
 enum class AttachmentLoad : GraphIndex
@@ -92,6 +98,7 @@ struct GraphAttachment {
     AttachmentStore       store { AttachmentStore::Store };
     rstd::array<float, 4> clear {};
     GraphIndex            stencil {};
+    GraphBindingSlot      binding;
     friend bool           operator==(const GraphAttachment&, const GraphAttachment&) = default;
 };
 struct GraphicsDescription {
@@ -206,7 +213,7 @@ inline auto check_pass_execution(const PassExecutionInfo& pass, GraphLimits limi
         return Err(GraphError { GraphErrorKind::Limit, pass.id });
     for (usize u {}; u < pass.uses.len(); ++u) {
         const auto& use   = pass.uses[u];
-        auto        found = resource_at(use.resource);
+        auto        found = resource_at(use);
         if (! found)
             return Err(GraphError { GraphErrorKind::MissingResource, pass.id, use.resource });
         auto checked = validate_use(*found, use, pass.queue);
@@ -292,9 +299,9 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
     return check_pass_execution(
         pass,
         limits,
-        [&](ResourceId id) -> const GraphBindingRequirement* {
+        [&](const PassResourceUse& use) -> const GraphBindingRequirement* {
             for (const auto& resource : resources)
-                if (resource.id == id) return rstd::addressof(resource);
+                if (resource.id == use.resource) return rstd::addressof(resource);
             return nullptr;
         },
         [&](fg::ResourceVersion id) -> fg::Index {
@@ -303,35 +310,84 @@ validate_pass_execution(const PassExecutionInfo& pass, slice<GraphBindingRequire
             return fg::invalid_index;
         });
 }
+struct GraphBindingVersion {
+    fg::ResourceVersion version;
+    fg::Index           resource { fg::invalid_index }, allocation { fg::invalid_index };
+    fg::Index           first_slotted { fg::invalid_index };
+    PassId              first_pass;
+    bool                used {}, written {};
+};
 class GraphBindingLayout {
-    HashMap<ResourceId, usize>              resources_;
-    HashMap<fg::ResourceVersion, fg::Index> versions_;
-    HashMap<ResourceId, fg::Index>          slots_;
-    bool                                    allocations_ {};
+    struct Data {
+        GraphSerial              scope;
+        Vec<GraphBindingVersion> versions;
+    };
+    rstd::sync::Arc<Data> data_;
+    explicit GraphBindingLayout(Data data): data_(rstd::sync::Arc<Data>::make(rstd::move(data))) {}
 
 public:
-    GraphBindingLayout(slice<GraphBindingRequirement> resources,
-                       slice<fg::AllocationSlot>      allocations = {})
-        : allocations_(! allocations.is_empty()) {
-        for (usize i {}; i < resources.len(); ++i) resources_.insert(resources[i].id, i);
-        for (const auto& allocation : allocations) {
-            versions_.insert(allocation.version, allocation.slot);
-            auto previous = slots_.get_mut(allocation.version.resource);
-            if (! previous)
-                slots_.insert(allocation.version.resource, allocation.slot);
-            else if (**previous != allocation.slot)
-                **previous = fg::invalid_index;
+    GraphBindingLayout(const GraphBindingLayout& other): data_(other.data_.clone()) {}
+    GraphBindingLayout(GraphBindingLayout&&) = default;
+    auto scope() const -> GraphSerial { return data_->scope; }
+    auto versions() const -> slice<GraphBindingVersion> { return data_->versions.as_slice(); }
+    bool same_layout(const GraphBindingLayout& other) const {
+        return rstd::sync::Arc<Data>::ptr_eq(data_, other.data_);
+    }
+    static auto from_graph(const fg::FrameGraph& graph) -> GraphBindingLayout {
+        const auto&    plan = graph.inspect();
+        Data           data { .scope = graph.scope() };
+        Vec<fg::Index> first_slots;
+        first_slots.resize(graph.resources().len(), fg::invalid_index);
+        data.versions.reserve(graph.versions().len());
+        for (usize i {}; i < graph.versions().len(); ++i) {
+            auto      version       = graph.versions()[i].id;
+            auto      first         = plan.lifetimes[i].uses.first();
+            auto      resource      = graph.resource_slot(version.resource);
+            auto      allocation    = plan.allocations[i].slot;
+            fg::Index first_slotted = fg::invalid_index;
+            if (allocation != fg::invalid_index && plan.accesses[i].used()) {
+                auto& slot    = first_slots[usize(resource)];
+                first_slotted = slot;
+                if (slot == fg::invalid_index) slot = fg::Index(i.to_primitive());
+            }
+            data.versions.push({ version,
+                                 resource,
+                                 allocation,
+                                 first_slotted,
+                                 first ? graph.passes()[usize(**first)].id : PassId {},
+                                 plan.accesses[i].used(),
+                                 plan.accesses[i].written });
         }
+        return GraphBindingLayout(rstd::move(data));
     }
-    auto resource(ResourceId id) const -> Option<usize> {
-        auto found = resources_.get(id);
-        return found ? Some(usize(**found)) : None<usize>();
+    static auto for_pass(GraphSerial scope, PassExecutionInfo& pass) -> GraphBindingLayout {
+        Data                                           data { .scope = scope };
+        HashMap<fg::ResourceVersion, GraphBindingSlot> lookup;
+        for (auto& use : pass.uses) {
+            fg::ResourceVersion version { use.resource, use.version };
+            auto                found = lookup.get(version);
+            if (found) {
+                use.binding = **found;
+            } else {
+                use.binding = { fg::Index(data.versions.len().to_primitive()) };
+                (void)lookup.insert(version, use.binding);
+                data.versions.push({ .version = version, .first_pass = pass.id, .used = true });
+            }
+            data.versions[usize(use.binding.index)].written |= use.access == GraphAccess::Write;
+        }
+        if (pass.graphics) {
+            Option<GraphAttachment>* attachments[] { &pass.graphics->color,
+                                                     &pass.graphics->depth,
+                                                     &pass.graphics->resolve };
+            for (auto* attachment : attachments) {
+                if (! *attachment) continue;
+                auto& value   = **attachment;
+                auto  found   = lookup.get({ value.resource, value.version });
+                value.binding = found ? **found : GraphBindingSlot {};
+            }
+        }
+        return GraphBindingLayout(rstd::move(data));
     }
-    auto slot(ResourceId id, Option<GraphIndex> version = None()) const -> Option<fg::Index> {
-        auto found = version ? versions_.get({ id, *version }) : slots_.get(id);
-        return found && **found != fg::invalid_index ? Some(fg::Index(**found)) : None<fg::Index>();
-    }
-    auto has_allocations() const -> bool { return allocations_; }
 };
 class VulkanPassSet {
     struct Data {
@@ -341,7 +397,7 @@ class VulkanPassSet {
         Data(VulkanPassData values, fg::FrameGraph compiled)
             : declarations(rstd::move(values)),
               graph(rstd::move(compiled)),
-              bindings(declarations.resources.as_slice(), graph.inspect().allocations.as_slice()) {}
+              bindings(GraphBindingLayout::from_graph(graph)) {}
     };
     rstd::sync::Arc<Data> data_;
     VulkanPassSet(VulkanPassData declarations, fg::FrameGraph graph)
@@ -432,10 +488,11 @@ public:
                 use.version     = declared.version.version;
                 use.access      = declared.access;
                 use.range       = declared.range;
+                use.binding     = { graph.version_index(declared.version) };
                 if (use.access == GraphAccess::Write && pass.graphics) {
-                    const Option<GraphAttachment>* attachments[] { &pass.graphics->color,
-                                                                   &pass.graphics->depth,
-                                                                   &pass.graphics->resolve };
+                    Option<GraphAttachment>* attachments[] { &pass.graphics->color,
+                                                             &pass.graphics->depth,
+                                                             &pass.graphics->resolve };
                     for (auto value : attachments)
                         if (*value && (**value).resource == use.resource &&
                             (**value).version == use.version) {
@@ -444,14 +501,15 @@ public:
                                 version->available != ((**value).store == AttachmentStore::Store))
                                 return Err(
                                     GraphError { GraphErrorKind::Conflict, node.id, use.resource });
+                            (**value).binding = use.binding;
                         }
                 }
             }
             auto valid = check_pass_execution(
                 pass,
                 limits,
-                [&](ResourceId id) -> const GraphBindingRequirement* {
-                    auto index = graph.resource_slot(id);
+                [&](const PassResourceUse& use) -> const GraphBindingRequirement* {
+                    auto index = graph.resource_slot(use.resource);
                     return index == fg::invalid_index
                                ? nullptr
                                : rstd::addressof(data.resources[usize(index)]);

@@ -9,6 +9,65 @@ using namespace vrento::vulkan;
 export namespace vrento_test
 {
 namespace fg = vrento::fg;
+using rstd::sync::Arc;
+inline auto timeline_signal(const DeviceSession& session) -> PFN_vkSignalSemaphore {
+    const auto& device = session.device().handle();
+    auto        load   = device.Dispatch().vkGetDeviceProcAddr;
+    auto        signal = load(*device, "vkSignalSemaphore");
+    return reinterpret_cast<PFN_vkSignalSemaphore>(signal ? signal
+                                                          : load(*device, "vkSignalSemaphoreKHR"));
+}
+class BindingSources {
+    struct Source {
+        ResourceId             id;
+        Option<GraphIndex>     version;
+        Arc<dyn<GraphBinding>> binding;
+    };
+    Vec<Source> sources_;
+
+public:
+    void add(ResourceId id, Arc<dyn<GraphBinding>> binding) {
+        sources_.push({ id, None(), rstd::move(binding) });
+    }
+    void add_version(fg::ResourceVersion version, Arc<dyn<GraphBinding>> binding) {
+        sources_.push({ version.resource, Some(GraphIndex(version.version)), rstd::move(binding) });
+    }
+    auto requirements() const -> Vec<GraphBindingRequirement> {
+        Vec<GraphBindingRequirement> result;
+        for (const auto& source : sources_) {
+            bool exists {};
+            for (const auto& requirement : result) exists |= requirement.id == source.id;
+            if (exists) continue;
+            auto info = source.binding->Info();
+            result.push({ source.id,
+                          info.kind,
+                          info.bytes,
+                          info.mip_levels,
+                          info.layers,
+                          info.aspects,
+                          true,
+                          info.content_revision,
+                          true,
+                          ! source.version });
+        }
+        return result;
+    }
+    auto for_layout(const GraphBindingLayout& layout) const -> GraphBindings {
+        GraphBindings result(layout);
+        auto          versions = layout.versions();
+        for (usize i {}; i < versions.len(); ++i) {
+            if (! versions[i].used) continue;
+            const auto version = versions[i].version;
+            for (const auto& source : sources_)
+                if (source.id == version.resource &&
+                    (! source.version || *source.version == version.version)) {
+                    result.bind({ fg::Index(i.to_primitive()) }, source.binding.clone()).unwrap();
+                    break;
+                }
+        }
+        return result;
+    }
+};
 inline auto texture_copy_pass(PassId id, ResourceId source, GraphIndex source_version,
                               ResourceId target, GraphIndex target_version,
                               GraphRange source_range = {}, GraphRange target_range = {})

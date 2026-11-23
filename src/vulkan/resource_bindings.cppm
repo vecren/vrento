@@ -18,8 +18,9 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
     if (mapping.scope != frame.bindings.scope() || prepared.Generation() != u64(mapping.scope))
         return Err(GraphExecutionError { GraphExecutionStage::Binding });
     for (const auto& external : mapping.externals)
-        if (! frame.bindings.resolve(external.resource, external.version))
-            return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, external.resource });
+        if (! frame.bindings.resolve({ external.version_index }))
+            return Err(GraphExecutionError {
+                GraphExecutionStage::Binding, {}, external.version.resource });
     HashMap<resource::TextureUseHandle, usize> chosen;
     for (usize i {}; i < selections.len(); ++i) {
         const auto& selection = selections[i];
@@ -58,7 +59,8 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
             required.first_layer > range.layer_count ||
             required.layer_count > range.layer_count - required.first_layer)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        if (auto existing = frame.bindings.resolve(version.resource, version.version)) {
+        GraphBindingSlot slot { binding.version_index };
+        if (auto existing = frame.bindings.resolve(slot)) {
             auto previous = (*existing)->Texture();
             if (! previous || previous->texture().identity() != view.texture().identity() ||
                 previous->description() != view.description())
@@ -66,13 +68,10 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
                     GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
             continue;
         }
-        auto bound = frame.bindings.bind_version(
-            version, Arc<dyn<GraphBinding>>::make(GraphTextureBinding(view)));
+        auto bound =
+            frame.bindings.bind(slot, Arc<dyn<GraphBinding>>::make(GraphTextureBinding(view)));
         if (bound.is_err()) return Err(bound.unwrap_err());
     }
-    HashMap<fg::ResourceVersion, usize> buffers;
-    for (usize i {}; i < frame.buffers.len(); ++i)
-        (void)buffers.insert(frame.buffers[i].version, i);
     for (const auto& binding : mapping.buffers) {
         auto version = binding.resource.version;
         auto value   = prepared.Resolve(binding.resource.use);
@@ -84,13 +83,7 @@ inline auto capture_resources(const pass::GraphResourceMap&                   ma
         if (binding.range.offset > allocation.size() ||
             binding.range.size > allocation.size() - binding.range.offset)
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        if (auto index = buffers.get(version)) {
-            if (frame.buffers[**index].allocation.identity() != allocation.identity())
-                return Err(
-                    GraphExecutionError { GraphExecutionStage::Binding, {}, version.resource });
-        } else {
-            frame.buffers.push({ version, allocation.clone() });
-        }
+        frame.buffers.push({ { binding.version_index }, allocation.clone() });
     }
     return Ok(empty {});
 }

@@ -41,7 +41,7 @@ struct GraphQueueState {
     struct Handoff {
         usize               source, target;
         PassResourceUse     use;
-        fg::ResourceVersion source_version;
+        GraphBindingSlot    source_binding;
     };
     Vec<Handoff> handoffs;
     bool         used {};
@@ -106,12 +106,12 @@ class GraphQueueProgram {
 
 public:
     GraphQueueProgram(GraphQueueProgram&&) = default;
-    static auto prepare(DeviceSession session, VulkanPassSet graph, const GraphBindings& bindings,
+    static auto prepare(DeviceSession session, VulkanPassSet graph, GraphBindings bindings,
                         VulkanPassBackends& backends, slice<GraphQueueAssignment> assignments,
                         Option<rstd::sync::Arc<dyn<NativeQueueSubmit>>> submitter = None())
         -> Result<GraphQueueProgram, GraphExecutionError> {
-        auto prepared =
-            PreparedGraphProgram::prepare(session, rstd::move(graph), bindings, backends, false);
+        auto prepared = PreparedGraphProgram::prepare(
+            session, rstd::move(graph), rstd::move(bindings), backends, false);
         if (prepared.is_err()) return Err(prepared.unwrap_err());
         auto state = rstd::sync::Arc<GraphQueueState>::make(prepared.unwrap());
         for (const auto& batch : state->program.schedule().batches) {
@@ -154,10 +154,9 @@ public:
             state->mapping.push(usize(index));
         }
         struct RangeOwner {
-            ResourceId id;
+            GraphBindingSlot binding;
             GraphRange range;
             usize      batch;
-            GraphIndex version {};
         };
         Vec<RangeOwner> owners;
         const auto&     schedule = state->program.schedule();
@@ -165,10 +164,7 @@ public:
             const auto& pass = state->program.description()
                                    .passes()[usize(schedule.batches[batch].passes[usize()])];
             for (const auto& use : pass.uses) {
-                auto info = state->program
-                                .binding_version(fg::ResourceVersion { use.resource, use.version })
-                                .unwrap()
-                                ->Info();
+                auto            info = state->program.binding(use.binding).unwrap()->Info();
                 Vec<GraphRange> ranges;
                 if (info.kind == GraphResourceKind::Buffer)
                     ranges.push(GraphRange(use.range));
@@ -186,11 +182,8 @@ public:
                     Vec<RangeOwner> next;
                     for (const auto& old : owners) {
                         bool overlaps =
-                            state->program
-                                    .binding_version(fg::ResourceVersion { old.id, old.version })
-                                    .unwrap()
-                                    ->Info()
-                                    .identity == info.identity &&
+                            state->program.binding(old.binding).unwrap()->Info().identity ==
+                                info.identity &&
                             (info.kind == GraphResourceKind::Buffer
                                  ? old.range.offset < range.offset + range.size &&
                                        range.offset < old.range.offset + old.range.size
@@ -226,11 +219,10 @@ public:
                         if (old.batch != batch && source_family != target_family) {
                             auto transferred  = use;
                             transferred.range = intersection;
-                            state->handoffs.push(
-                                { old.batch, batch, transferred, { old.id, old.version } });
+                            state->handoffs.push({ old.batch, batch, transferred, old.binding });
                         }
                     }
-                    next.push({ use.resource, range, batch, use.version });
+                    next.push({ use.binding, range, batch });
                     owners = rstd::move(next);
                 }
             }
@@ -298,7 +290,7 @@ public:
                 if (handoff.source == index) {
                     auto destination =
                         state_->queues[state_->mapping[handoff.target]]->queue().family_index;
-                    auto released = state_->program.binding_version(handoff.source_version)
+                    auto released = state_->program.binding(handoff.source_binding)
                                         .unwrap()
                                         ->Release(work, destination, handoff.use);
                     if (released.is_err()) {

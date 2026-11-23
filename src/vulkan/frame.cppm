@@ -7,7 +7,7 @@ export namespace vrento::vulkan
 {
 struct GraphFrameRequest {
     struct Buffer {
-        fg::ResourceVersion version;
+        GraphBindingSlot    slot;
         BufferAllocation    allocation;
     };
     GraphBindings                  bindings;
@@ -58,6 +58,8 @@ public:
                       GraphFrameRequest request, texture::Submission work,
                       Vec<resource_registry::PreparedTextureUpdate> regions = {})
         -> Result<GraphFrame, GraphExecutionError> {
+        if (! request.bindings.matches(graph.description().binding_layout()))
+            return Err(GraphExecutionError { GraphExecutionStage::Binding });
         auto uploaded = resources->PreparePendingUploads(work);
         if (uploaded.is_err()) {
             GraphExecutionError error { GraphExecutionStage::Prepare };
@@ -83,18 +85,21 @@ public:
         }
         for (auto& buffer : request.buffers) {
             auto binding = batch->BufferBinding(buffer.allocation);
-            auto existing =
-                request.bindings.resolve(buffer.version.resource, buffer.version.version);
+            auto existing = request.bindings.resolve(buffer.slot);
             if (existing) {
                 if ((*existing)->Info().identity != binding->Info().identity)
-                    return Err(GraphExecutionError {
-                        GraphExecutionStage::Binding, {}, buffer.version.resource });
+                    return Err(GraphExecutionError { GraphExecutionStage::Binding,
+                                                     {},
+                                                     graph.description()
+                                                         .binding_layout()
+                                                         .versions()[usize(buffer.slot.index)]
+                                                         .version.resource });
                 continue;
             }
-            auto bound = request.bindings.bind_version(buffer.version, rstd::move(binding));
+            auto bound = request.bindings.bind(buffer.slot, rstd::move(binding));
             if (bound.is_err()) return Err(bound.unwrap_err());
         }
-        auto started = graph.prepare_frame(request.bindings,
+        auto started = graph.prepare_frame(rstd::move(request.bindings),
                                            request.parameters.as_slice(),
                                            rstd::move(request.scopes),
                                            true,

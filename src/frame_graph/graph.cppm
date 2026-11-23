@@ -115,9 +115,10 @@ public:
         return i == invalid_index ? nullptr : rstd::addressof(resources()[usize(i)]);
     }
     auto find_version(ResourceVersion id) const -> const VersionNode* {
-        auto i = data_->lookup.version(id);
+        auto i = version_index(id);
         return i == invalid_index ? nullptr : rstd::addressof(versions()[usize(i)]);
     }
+    auto version_index(ResourceVersion id) const -> Index { return data_->lookup.version(id); }
     auto find_pass(PassId id) const -> const PassNode* {
         auto i = data_->lookup.pass(data_->graph, id);
         return i == invalid_index ? nullptr : rstd::addressof(passes()[usize(i)]);

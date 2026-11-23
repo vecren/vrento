@@ -192,18 +192,13 @@ void compute_output(DeviceSession session, QueueParameters compute, QueueParamet
     desc.extent = { 4, 4 };
     desc.usage  = tex::Usage::ColorAttachment | tex::Usage::Sampled | tex::Usage::TransferSource;
     auto          output = queue.CreateView(queue.CreateTexture(desc).unwrap(), {}).unwrap();
-    GraphBindings bindings(1);
-    bindings
-        .bind({ 1, 1 },
-              rstd::sync::Arc<dyn<GraphBinding>>::make(GraphGpuBufferBinding(assets->first)))
-        .unwrap();
-    bindings
-        .bind({ 2, 1 },
-              rstd::sync::Arc<dyn<GraphBinding>>::make(GraphGpuBufferBinding(assets->second)))
-        .unwrap();
-    bindings.bind({ 3, 1 }, rstd::sync::Arc<dyn<GraphBinding>>::make(GraphTextureBinding(output)))
-        .unwrap();
-    rg::VulkanPassData    data { .scope = 1, .resources = bindings.descriptions() };
+    vrento_test::BindingSources bindings;
+    bindings.add({ 1, 1 },
+                 rstd::sync::Arc<dyn<GraphBinding>>::make(GraphGpuBufferBinding(assets->first)));
+    bindings.add({ 2, 1 },
+                 rstd::sync::Arc<dyn<GraphBinding>>::make(GraphGpuBufferBinding(assets->second)));
+    bindings.add({ 3, 1 }, rstd::sync::Arc<dyn<GraphBinding>>::make(GraphTextureBinding(output)));
+    rg::VulkanPassData    data { .scope = 1, .resources = bindings.requirements() };
     rg::PassExecutionInfo write { .id    = { 1 },
                                   .kind  = 101,
                                   .queue = { 1, rg::QueueClass::Compute } };
@@ -251,10 +246,11 @@ void compute_output(DeviceSession session, QueueParameters compute, QueueParamet
                                            session.device().graphics_queue() },
                                          { { 1, rg::QueueClass::Compute }, compute },
                                          { { 2, rg::QueueClass::Transfer }, transfer } };
+    auto                 graph    = vrento_test::make_pass_set(rstd::move(data)).unwrap();
     auto                 prepared = GraphQueueProgram::prepare(
         session,
-        vrento_test::make_pass_set(rstd::move(data)).unwrap(),
-        bindings,
+        graph,
+        bindings.for_layout(graph.binding_layout()),
         backends,
         slice<GraphQueueAssignment>::from_raw_parts(assignments, usize(3)));
     if (prepared.is_err()) {
@@ -510,9 +506,7 @@ TEST(GpuBuffer, UploadedRangeOverwrite) {
     copy(next, second);
     auto token = queue.Submit(rstd::move(next)).unwrap();
     rstd_assert(! token.poll().unwrap());
-    auto signal = reinterpret_cast<PFN_vkSignalSemaphoreKHR>(
-        session.device().handle().Dispatch().vkGetDeviceProcAddr(*session.device().handle(),
-                                                                 "vkSignalSemaphoreKHR"));
+    auto                  signal = vrento_test::timeline_signal(session);
     VkSemaphoreSignalInfo released { VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO };
     released.semaphore = handle;
     released.value     = 1;

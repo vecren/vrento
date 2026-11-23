@@ -207,7 +207,6 @@ TEST(VulkanRenderer, TypedDescriptionPendingAndFrameRevision) {
     ASSERT_EQ(compiled.descriptions().len(), usize(1));
     EXPECT_EQ(compiled.descriptions()[usize()].revision(), 8u);
     EXPECT_TRUE(compiled.descriptions()[usize()].get<Configuration>());
-    vk::GraphBindings         bindings(44);
     Vec<vk::PassFrameBinding> inputs;
     inputs.push(compiled.frame<Native>(vk::PassId { 4 }, 8, unsigned(0)).unwrap());
     EXPECT_TRUE(compiled.frame<Native>({ 4 }, 7, unsigned(0)).is_err());
@@ -215,7 +214,7 @@ TEST(VulkanRenderer, TypedDescriptionPendingAndFrameRevision) {
     EXPECT_EQ(inputs[usize()].revision(), 8u);
     auto frame =
         compiled
-            .instantiate(bindings,
+            .instantiate(compiled.make_bindings(),
                          inputs.as_slice(),
                          Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
             .unwrap()
@@ -250,13 +249,12 @@ TEST(VulkanRenderer, ReusesImmutableDescriptionsAndKeepsPreviousOnFailure) {
     renderer.compile(graph, descriptions()).unwrap();
     for (unsigned frame {}; frame < 3; ++frame) {
         renderer.compile(graph, descriptions()).unwrap();
-        vk::GraphBindings         bindings(46);
         Vec<vk::PassFrameBinding> inputs;
         inputs.push(
             renderer.compiled()->frame<Native>(vk::PassId { 1 }, 1, unsigned(frame)).unwrap());
         auto prepared =
             renderer.compiled()
-                ->instantiate(bindings,
+                ->instantiate(renderer.compiled()->make_bindings(),
                               inputs.as_slice(),
                               Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
                 .unwrap()
@@ -421,10 +419,9 @@ TEST(VulkanRenderer, StandalonePassRetainsPendingDescription) {
     EXPECT_TRUE(weak.upgrade());
     EXPECT_EQ(state->compiled, 3u);
     {
-        vk::GraphBindings bindings(48);
         auto              context = vk::TextureContext::create(session).unwrap();
         auto              work    = context.Begin().unwrap();
-        pass->record(bindings,
+        pass->record(pass->make_bindings(),
                      None(),
                      Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}),
                      work)
@@ -512,16 +509,14 @@ TEST(VulkanRenderer, CopyDescriptionReusesCompiledGraphAcrossFrames) {
     vk::register_texture_factories(renderer).unwrap();
     renderer.compile(graph, rstd::move(descriptions)).unwrap();
     auto              compiled = renderer.compiled().unwrap();
-    vk::GraphBindings bindings(46);
-    bindings.bind(input.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(source)))
-        .unwrap();
-    bindings
-        .bind(output.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target)))
-        .unwrap();
+    vrento_test::BindingSources bindings;
+    bindings.add(input.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(source)));
+    bindings.add(output.resource,
+                 Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target)));
     for (unsigned frame = 0; frame != 2; ++frame) {
         auto execution =
             compiled
-                .instantiate(bindings,
+                .instantiate(bindings.for_layout(compiled.description().binding_layout()),
                              {},
                              Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
                 .unwrap()
@@ -565,13 +560,13 @@ TEST(VulkanRenderer, ClearGraphicsDescriptionOwnsExecution) {
     Vec<vk::PassInput> descriptions;
     descriptions.push(make_test_pass(47, 1, rstd::move(pass), vk::GraphicsClearDesc {}));
     renderer.compile(graph, rstd::move(descriptions)).unwrap();
-    vk::GraphBindings bindings(47);
-    bindings.bind(target.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)))
-        .unwrap();
+    vrento_test::BindingSources bindings;
+    bindings.add(target.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)));
     auto frame =
         renderer.compiled()
-            ->instantiate(
-                bindings, {}, Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
+            ->instantiate(bindings.for_layout(renderer.compiled()->description().binding_layout()),
+                          {},
+                          Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
             .unwrap()
             .take_ready();
     renderer.clear();
@@ -635,7 +630,7 @@ TEST(VulkanRenderer, FramePendingKeepsInputsAndCompletedNativePasses) {
     auto resources = Arc<vrento::resource_registry::RenderResourceSystem>::make();
     ASSERT_TRUE(resources->Initialize(session));
     auto request = [&] {
-        vk::GraphFrameRequest value { .bindings = vk::GraphBindings(72),
+        vk::GraphFrameRequest value { .bindings = compiled.make_bindings(),
                                       .scopes   = Box<dyn<vk::GraphicsScopeBackend>>::make(
                                           vk::GraphicsScopeCache {}) };
         value.parameters.push(compiled.frame<Native>({ 1 }, 1, unsigned(17)).unwrap());
@@ -753,7 +748,7 @@ TEST(VulkanRenderer, SubmittedFrameTimeoutRetainsOwnersUntilCompletion) {
     auto retained = Arc<dyn<rstd::any::Any>>::make(unsigned(31));
     auto lifetime = retained.downgrade();
     work.retain(rstd::move(retained));
-    vk::GraphFrameRequest request { .bindings = vk::GraphBindings(75),
+    vk::GraphFrameRequest request { .bindings = renderer.compiled()->make_bindings(),
                                     .scopes   = Box<dyn<vk::GraphicsScopeBackend>>::make(
                                         vk::GraphicsScopeCache {}) };
     auto                  frame =
@@ -885,10 +880,9 @@ TEST(VulkanRenderer, GraphicsDrawRebindsAndRecompilesRecipeWithDeviceCache) {
         vrento::texture::Usage::ColorAttachment | vrento::texture::Usage::TransferSource;
     for (unsigned frame {}; frame < 2; ++frame) {
         auto view = queue.CreateView(queue.CreateTexture(texture).unwrap(), {}).unwrap();
-        vk::GraphBindings bindings(101);
-        bindings
-            .bind(target.resource, Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)))
-            .unwrap();
+        vrento_test::BindingSources bindings;
+        bindings.add(target.resource,
+                     Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)));
         vk::GraphicsFrameData input;
         input.viewports.push({ 0, 0, 4, 4, 0, 1 });
         input.scissors.push({ { 0, 0 }, { 4, 4 } });
@@ -898,9 +892,10 @@ TEST(VulkanRenderer, GraphicsDrawRebindsAndRecompilesRecipeWithDeviceCache) {
             renderer.compiled()->frame<vk::GraphicsDrawPass>(id, 1, rstd::move(input)).unwrap());
         auto instance =
             renderer.compiled()
-                ->instantiate(bindings,
-                              parameters.as_slice(),
-                              Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
+                ->instantiate(
+                    bindings.for_layout(renderer.compiled()->description().binding_layout()),
+                    parameters.as_slice(),
+                    Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
                 .unwrap()
                 .take_ready();
         auto work = queue.Begin().unwrap();
@@ -970,7 +965,7 @@ TEST(VulkanRenderer, TextureRegionSurvivesPendingFailureAndCancellationWithoutCo
         regions.push(update.clone());
         return vk::GraphFrame::begin(resources.clone(),
                                      compiled,
-                                     { .bindings = vk::GraphBindings(102),
+                                     { .bindings = compiled.make_bindings(),
                                        .scopes   = Box<dyn<vk::GraphicsScopeBackend>>::make(
                                            vk::GraphicsScopeCache {}) },
                                      resources->BeginFrame().unwrap(),
@@ -1193,17 +1188,18 @@ TEST(VulkanRenderer, IndexedFramesResolveSparseReorderedPasses) {
     auto scopes = [] {
         return Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {});
     };
-    vk::GraphBindings bindings(801);
-    auto frame = compiled.prepare_frame(bindings, inputs.as_slice(), scopes()).unwrap();
+    auto frame =
+        compiled.prepare_frame(compiled.make_bindings(), inputs.as_slice(), scopes()).unwrap();
     inputs.push(inputs[usize()].clone());
-    EXPECT_TRUE(compiled.prepare_frame(bindings, inputs.as_slice(), scopes()).is_err());
+    EXPECT_TRUE(
+        compiled.prepare_frame(compiled.make_bindings(), inputs.as_slice(), scopes()).is_err());
     renderer.clear();
     frame.advance().unwrap();
     EXPECT_EQ(first->observed, 31u);
     EXPECT_EQ(second->observed, 47u);
     EXPECT_EQ(first->instantiated, 1u);
     EXPECT_EQ(second->instantiated, 1u);
-    auto defaults = compiled.prepare_frame(bindings, {}, scopes()).unwrap();
+    auto defaults = compiled.prepare_frame(compiled.make_bindings(), {}, scopes()).unwrap();
     defaults.advance().unwrap();
     EXPECT_EQ(first->observed, 0u);
     EXPECT_EQ(second->observed, 0u);
@@ -1238,21 +1234,24 @@ TEST(VulkanRenderer, FrameBindingRejectsAnotherCompilationSharingTheSameNativePa
     auto scopes = [] {
         return Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {});
     };
-    vk::GraphBindings bindings(802);
-    EXPECT_TRUE(other.prepare_frame(bindings, inputs.as_slice(), scopes()).is_err());
+    EXPECT_TRUE(other.prepare_frame(other.make_bindings(), inputs.as_slice(), scopes()).is_err());
+    EXPECT_TRUE(other.prepare_frame(original.make_bindings(), {}, scopes()).is_err());
     first.compile(graph, descriptions()).unwrap();
     EXPECT_EQ(first.status().reason, vk::CompileReason::Reused);
     auto reused   = first.compiled().unwrap();
-    auto accepted = reused.prepare_frame(bindings, inputs.as_slice(), scopes()).unwrap();
+    auto accepted =
+        reused.prepare_frame(original.make_bindings(), inputs.as_slice(), scopes()).unwrap();
     accepted.advance().unwrap();
     EXPECT_EQ(state->observed, 19u);
     auto a     = first.compile_pass(prototype.clone()).unwrap().take_ready();
     auto b     = second.compile_pass(prototype.clone()).unwrap().take_ready();
     auto queue = vk::TextureContext::create(session).unwrap();
     auto work  = queue.Begin().unwrap();
-    EXPECT_TRUE(
-        b.record(bindings, Some(a.frame<Native>({ 42 }, 3, unsigned(1)).unwrap()), scopes(), work)
-            .is_err());
+    EXPECT_TRUE(b.record(b.make_bindings(),
+                         Some(a.frame<Native>({ 42 }, 3, unsigned(1)).unwrap()),
+                         scopes(),
+                         work)
+                    .is_err());
     work.discard();
 }
 TEST(VulkanRenderer, IndexedPendingFramesKeepSeparateInputs) {
@@ -1275,7 +1274,7 @@ TEST(VulkanRenderer, IndexedPendingFramesKeepSeparateInputs) {
         Vec<vk::PassFrameBinding> inputs;
         inputs.push(compiled.frame<Native>({ 33 }, 1, value).unwrap());
         return compiled
-            .prepare_frame(vk::GraphBindings(803),
+            .prepare_frame(compiled.make_bindings(),
                            inputs.as_slice(),
                            Box<dyn<vk::GraphicsScopeBackend>>::make(vk::GraphicsScopeCache {}))
             .unwrap();

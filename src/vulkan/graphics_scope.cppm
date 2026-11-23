@@ -90,7 +90,7 @@ auto GraphicsScopeCache::Prepare(const GraphicsDescription& description,
     auto attachment = [&](const GraphAttachment& declared,
                           bool                   depth,
                           bool                   resolve) -> Result<empty, GraphExecutionError> {
-        auto binding = context.bindings.resolve(declared.resource, declared.version);
+        auto binding = context.bindings.resolve(declared.binding);
         if (binding.is_none())
             return Err(GraphExecutionError { GraphExecutionStage::Binding, {}, declared.resource });
         auto view = (*binding)->Texture();

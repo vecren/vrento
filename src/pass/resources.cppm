@@ -56,17 +56,24 @@ struct TextureBinding {
     TextureUse        resource;
     fg::ResourceRange range;
     resource::TextureResourceRef definition;
+    fg::Index                    version_index;
 };
 struct BufferBinding {
     BufferUse         resource;
     fg::ResourceRange range;
     resource::BufferResourceRef definition;
+    fg::Index                   version_index;
+};
+struct ExternalBinding {
+    fg::ResourceVersion version;
+    fg::Index           version_index;
+    friend bool         operator==(ExternalBinding, ExternalBinding) = default;
 };
 struct GraphResourceMap {
     fg::Serial           scope {};
     Vec<TextureBinding>  textures;
     Vec<BufferBinding>   buffers;
-    Vec<fg::ResourceVersion> externals;
+    Vec<ExternalBinding> externals;
     auto                 same_bindings(const GraphResourceMap& other) const -> bool {
         if (scope != other.scope || textures.len() != other.textures.len() ||
             buffers.len() != other.buffers.len() || externals.len() != other.externals.len())
@@ -74,7 +81,7 @@ struct GraphResourceMap {
         for (usize i {}; i < textures.len(); ++i) {
             const auto& a = textures[i];
             const auto& b = other.textures[i];
-            if (a.resource.version != b.resource.version ||
+            if (a.version_index != b.version_index || a.resource.version != b.resource.version ||
                 a.resource.handle != b.resource.handle || a.range != b.range ||
                 ! a.definition.valid() || ! b.definition.valid() ||
                 a.definition.id() != b.definition.id() ||
@@ -85,9 +92,9 @@ struct GraphResourceMap {
         for (usize i {}; i < buffers.len(); ++i) {
             const auto& a = buffers[i];
             const auto& b = other.buffers[i];
-            if (a.resource.version != b.resource.version || a.resource.use != b.resource.use ||
-                a.range != b.range || ! a.definition.valid() || ! b.definition.valid() ||
-                a.definition.id() != b.definition.id() ||
+            if (a.version_index != b.version_index || a.resource.version != b.resource.version ||
+                a.resource.use != b.resource.use || a.range != b.range || ! a.definition.valid() ||
+                ! b.definition.valid() || a.definition.id() != b.definition.id() ||
                 a.definition.definition().definition != b.definition.definition().definition)
                 return false;
         }
@@ -303,6 +310,7 @@ public:
             if (! access.used()) continue;
             const auto& life    = indexed.lifetimes[i];
             auto        version = life.version;
+            auto        index_value = fg::Index(i.to_primitive());
             auto        missing = [&] {
                 auto pass = graph.passes()[usize(*life.uses.first().unwrap())].id;
                 return Err(fg::Error { fg::ErrorKind::MissingResource, pass, version.resource });
@@ -311,18 +319,22 @@ public:
                 const auto& texture = uses_[**index];
                 auto        entry   = texture_entries.get(texture.handle);
                 if (! entry || ! plan.textures[**entry].definition.valid()) return missing();
-                result.textures.push(
-                    { texture, access.bounds, plan.textures[**entry].definition.clone() });
+                result.textures.push({ texture,
+                                       access.bounds,
+                                       plan.textures[**entry].definition.clone(),
+                                       index_value });
             } else if (auto index = buffers_by_id_.get(version.resource)) {
                 auto use   = buffers_[**index].resource.use;
                 auto entry = buffer_entries.get(use);
                 if (! entry || ! plan.buffers[**entry].definition.valid()) return missing();
-                result.buffers.push(
-                    { { use, version }, access.bounds, plan.buffers[**entry].definition.clone() });
+                result.buffers.push({ { use, version },
+                                      access.bounds,
+                                      plan.buffers[**entry].definition.clone(),
+                                      index_value });
             } else {
                 auto resource = graph.find_resource(version.resource);
                 if (! resource || ! resource->imported) return missing();
-                result.externals.push(fg::ResourceVersion(version));
+                result.externals.push({ version, index_value });
             }
         }
         return Ok(rstd::move(result));

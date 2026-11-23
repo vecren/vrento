@@ -19,7 +19,24 @@ auto read_aspect(vk::TextureContext &context,const tex::TextureViewRef &view,VkI
     auto buffer=context.session().device().memory_allocator().create_buffer(desc,vvk::MemoryRequest::Readback()).unwrap();auto work=context.Begin().unwrap();work.commands()->UseTexture({view,tex::Access::TransferSource,tex::Stages::Transfer}).unwrap();auto command=vk::native_recording(work,context.session()).unwrap();VkBufferImageCopy copy{};copy.imageSubresource={VkImageAspectFlags(aspect),0,0,1};copy.imageExtent={extent.width,extent.height,1};context.session().device().handle().Dispatch().vkCmdCopyImageToBuffer(command,vk::native_texture(view.texture()).unwrap(),VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer.handle(),1,&copy);context.wait(context.Submit(rstd::move(work)).unwrap()).unwrap();auto allocation=buffer.allocation();auto memory=allocation.map().unwrap();allocation.invalidate().unwrap();Vec<u8> result;result.resize(usize(desc.size),u8(0));std::memcpy(result.data(),memory.data(),desc.size);return result;
 }
 void attachment(vk::TextureContext &context,const tex::TextureViewRef &view,vk::AttachmentLoad load,float depth,unsigned stencil) {
-    vk::GraphBindings bindings(91);bindings.bind({1,91},Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view))).unwrap();vk::GraphicsDescription desc;desc.depth=Some(vk::GraphAttachment{{1,91},1,load});desc.depth->clear={depth,0.f,0.f,0.f};desc.depth->stencil=stencil;
+    vk::GraphicsDescription desc;
+    desc.depth          = Some(vk::GraphAttachment { { 1, 91 }, 1, load });
+    desc.depth->clear   = { depth, 0.f, 0.f, 0.f };
+    desc.depth->stencil = stencil;
+    vk::PassExecutionInfo pass { .id = { 1 }, .graphics = Some(desc) };
+    pass.uses.push({ { 1, 91 },
+                     1,
+                     vk::GraphAccess::Write,
+                     vk::PassUsage::DepthAttachment,
+                     vk::PassStages::Depth,
+                     { .aspect = 2, .mip_count = 1, .layer_count = 1 } });
+    auto layout = vk::GraphBindingLayout::for_pass(91, pass);
+    desc        = *pass.graphics;
+    vk::GraphBindings bindings(layout);
+    bindings
+        .bind(pass.uses[usize()].binding,
+              Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)))
+        .unwrap();
     vk::GraphicsScopeCache cache;auto scope=cache.Prepare(desc,{context.session(),bindings,{}}).unwrap().take_ready();auto info=scope->Info();EXPECT_EQ(info.signature.depth_load_op,load==vk::AttachmentLoad::Clear?VK_ATTACHMENT_LOAD_OP_CLEAR:VK_ATTACHMENT_LOAD_OP_LOAD);EXPECT_EQ(info.signature.depth_stencil_load_op,info.signature.depth_load_op);EXPECT_EQ(info.signature.depth_stencil_store_op,VK_ATTACHMENT_STORE_OP_STORE);
     auto work=context.Begin().unwrap();work.commands()->UseTexture({view,tex::Access::DepthAttachment,tex::Stages::Depth,load==vk::AttachmentLoad::Clear}).unwrap();work.retain(scope.clone());auto command=vk::native_recording(work,context.session()).unwrap();VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};begin.renderPass=info.render_pass;begin.framebuffer=info.framebuffer;begin.renderArea=info.area;begin.clearValueCount=info.clear_count;begin.pClearValues=info.clear.as_slice().as_raw_ptr();context.session().device().handle().Dispatch().vkCmdBeginRenderPass(command,&begin,VK_SUBPASS_CONTENTS_INLINE);context.session().device().handle().Dispatch().vkCmdEndRenderPass(command);context.wait(context.Submit(rstd::move(work)).unwrap()).unwrap();
 }
@@ -40,8 +57,60 @@ TEST(DepthStencil, AttachmentUploadAndImageCopyPreserveTheOtherAspect) {
     auto session=vk::DeviceSession::create({.validation=true}).unwrap();auto context=vk::TextureContext::create(session).unwrap();auto diagnostics=messages(session);auto desc=depth_description();ASSERT_TRUE(context.QuerySupport(desc).is_ok());auto source=context.CreateView(context.CreateTexture(desc).unwrap(),{tex::Dimension::D2,{tex::Aspect::Depth}}).unwrap();auto target=context.CreateView(context.CreateTexture(desc).unwrap(),{tex::Dimension::D2,{tex::Aspect::Depth}}).unwrap();attachment(context,source,vk::AttachmentLoad::Clear,.375f,0x5a);attachment(context,target,vk::AttachmentLoad::Clear,.875f,0xc3);
     const float patch[]{.1f,.2f,.3f,.4f,.5f,.6f};Vec<u8> bytes;bytes.resize(usize(28),u8(0xe7));std::memcpy(bytes.data(),patch,12);std::memcpy(bytes.data()+16,patch+3,12);auto work=context.Begin().unwrap();tex::TextureUpload upload;upload.target=source;upload.x=upload.y=1;upload.width=3;upload.height=2;upload.row_pitch=16;upload.bytes=rstd::move(bytes);work.commands()->Upload(rstd::move(upload)).unwrap();context.wait(context.Submit(rstd::move(work)).unwrap()).unwrap();attachment(context,source,vk::AttachmentLoad::Load,0,0);
     auto sampled=context.Begin().unwrap();tex::SamplerDesc point;point.sample.minFilter=point.sample.magFilter=vrento::TextureFilter::NEAREST;point.sample.mipFilter=vrento::TextureMipmapFilter::None;auto sampler=context.CreateSampler(point).unwrap();sampled.commands()->UseSampledView(source,sampler,tex::Stages::Fragment).unwrap();context.wait(context.Submit(rstd::move(sampled)).unwrap()).unwrap();EXPECT_EQ(vk::sampled_image(source,sampler).unwrap().layout,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-    vk::GraphBindings bindings(92);bindings.bind({1,92},Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(source))).unwrap();bindings.bind({2,92},Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target))).unwrap();vk::PassExecutionInfo copy{.id={1},.kind=vk::texture_copy_kind};copy.uses.push({{1,92},1,vk::GraphAccess::Read,vk::PassUsage::Transfer,vk::PassStages::Transfer,{.aspect=2,.mip_count=1,.layer_count=1}});copy.uses.push({{2,92},1,vk::GraphAccess::Write,vk::PassUsage::Transfer,vk::PassStages::Transfer,{.aspect=2,.mip_count=1,.layer_count=1}});auto compiled=copy_pass(session,copy);auto prepared=compiled->Prepare({session,bindings,{}}).unwrap().take_ready();work=context.Begin().unwrap();work.commands()->UseTexture({source,tex::Access::TransferSource,tex::Stages::Transfer}).unwrap();work.commands()->UseTexture({target,tex::Access::TransferDestination,tex::Stages::Transfer}).unwrap();vk::GraphRecordContext recording{session,bindings,copy,work,{}};prepared->Record(recording).unwrap();work.retain(prepared.clone());context.wait(context.Submit(rstd::move(work)).unwrap()).unwrap();
+    vk::PassExecutionInfo copy { .id = { 1 }, .kind = vk::texture_copy_kind };
+    copy.uses.push({ { 1, 92 },
+                     1,
+                     vk::GraphAccess::Read,
+                     vk::PassUsage::Transfer,
+                     vk::PassStages::Transfer,
+                     { .aspect = 2, .mip_count = 1, .layer_count = 1 } });
+    copy.uses.push({ { 2, 92 },
+                     1,
+                     vk::GraphAccess::Write,
+                     vk::PassUsage::Transfer,
+                     vk::PassStages::Transfer,
+                     { .aspect = 2, .mip_count = 1, .layer_count = 1 } });
+    auto              layout = vk::GraphBindingLayout::for_pass(92, copy);
+    vk::GraphBindings bindings(layout);
+    bindings
+        .bind(copy.uses[usize()].binding,
+              Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(source)))
+        .unwrap();
+    bindings
+        .bind(copy.uses[usize(1)].binding,
+              Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target)))
+        .unwrap();
+    auto compiled = copy_pass(session, copy);
+    auto prepared = compiled->Prepare({ session, bindings, {} }).unwrap().take_ready();
+    work          = context.Begin().unwrap();
+    work.commands()
+        ->UseTexture({ source, tex::Access::TransferSource, tex::Stages::Transfer })
+        .unwrap();
+    work.commands()
+        ->UseTexture({ target, tex::Access::TransferDestination, tex::Stages::Transfer })
+        .unwrap();
+    vk::GraphRecordContext recording { session, bindings, copy, work, {} };
+    prepared->Record(recording).unwrap();
+    work.retain(prepared.clone());
+    context.wait(context.Submit(rstd::move(work)).unwrap()).unwrap();
     auto source_depth=read_aspect(context,source,VK_IMAGE_ASPECT_DEPTH_BIT,4);auto target_depth=read_aspect(context,target,VK_IMAGE_ASPECT_DEPTH_BIT,4);ASSERT_EQ(source_depth.as_slice(),target_depth.as_slice());for(unsigned y{};y<4;++y)for(unsigned x{};x<6;++x){float actual;std::memcpy(&actual,source_depth.data()+(y*6+x)*4,4);EXPECT_EQ(actual,x>=1&&x<4&&y>=1&&y<3?patch[(y-1)*3+x-1]:.375f);}
     for(auto view:array<tex::TextureViewRef,2>{source,target}){auto stencil=read_aspect(context,view,VK_IMAGE_ASPECT_STENCIL_BIT,1);for(auto byte:stencil.as_slice())EXPECT_EQ(byte,u8(view.texture().identity()==source.texture().identity()?0x5a:0xc3));}
-    auto pure=depth_description(vrento::TextureFormat::D32F);auto other=context.CreateView(context.CreateTexture(pure).unwrap(),{tex::Dimension::D2,{tex::Aspect::Depth}}).unwrap();vk::GraphBindings mixed(92);mixed.bind({1,92},Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(other))).unwrap();mixed.bind({2,92},Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target))).unwrap();auto invalid=compiled->Prepare({session,mixed,{}});ASSERT_TRUE(invalid.is_err());EXPECT_EQ(invalid.unwrap_err().stage,vk::GraphExecutionStage::Unsupported);EXPECT_EQ(session.validation_errors(),0u);
+    auto              pure  = depth_description(vrento::TextureFormat::D32F);
+    auto              other = context
+                                  .CreateView(context.CreateTexture(pure).unwrap(),
+                                              { tex::Dimension::D2, { tex::Aspect::Depth } })
+                                  .unwrap();
+    vk::GraphBindings mixed(layout);
+    mixed
+        .bind(copy.uses[usize()].binding,
+              Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(other)))
+        .unwrap();
+    mixed
+        .bind(copy.uses[usize(1)].binding,
+              Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(target)))
+        .unwrap();
+    auto invalid = compiled->Prepare({ session, mixed, {} });
+    ASSERT_TRUE(invalid.is_err());
+    EXPECT_EQ(invalid.unwrap_err().stage, vk::GraphExecutionStage::Unsupported);
+    EXPECT_EQ(session.validation_errors(), 0u);
 }
