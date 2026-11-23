@@ -878,14 +878,17 @@ TEST(VulkanRenderer, GraphicsDrawRebindsAndRecompilesRecipeWithDeviceCache) {
     texture.extent = { 4, 4 };
     texture.usage =
         vrento::texture::Usage::ColorAttachment | vrento::texture::Usage::TransferSource;
+    vk::GraphicsDrawBindings::Data draw_bindings;
+    draw_bindings.viewports.push({ 0, 0, 4, 4, 0, 1 });
+    draw_bindings.scissors.push({ { 0, 0 }, { 4, 4 } });
+    vk::GraphicsDrawBindings shared_bindings(rstd::move(draw_bindings));
     for (unsigned frame {}; frame < 2; ++frame) {
         auto view = queue.CreateView(queue.CreateTexture(texture).unwrap(), {}).unwrap();
         vrento_test::BindingSources bindings;
         bindings.add(target.resource,
                      Arc<dyn<vk::GraphBinding>>::make(vk::GraphTextureBinding(view)));
         vk::GraphicsFrameData input;
-        input.viewports.push({ 0, 0, 4, 4, 0, 1 });
-        input.scissors.push({ { 0, 0 }, { 4, 4 } });
+        input.bindings = Some(shared_bindings.clone());
         input.draws.push({ 3, 0 });
         Vec<vk::PassFrameBinding> parameters;
         parameters.push(

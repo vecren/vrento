@@ -560,12 +560,43 @@ struct PreparedDescriptorBinding {
     }
 };
 
+class DescriptorBindingVersion {
+public:
+    auto clone() const -> DescriptorBindingVersion {
+        return DescriptorBindingVersion(binding_.clone());
+    }
+    auto handle() const -> resource::DescriptorBindingHandle { return binding_->handle; }
+    auto images() const -> slice<DescriptorImageBinding> { return binding_->images.as_slice(); }
+    auto set_handle() const -> VkDescriptorSet {
+        return binding_->set ? binding_->set->handle : VK_NULL_HANDLE;
+    }
+    void Record(vvk::CommandBuffer& command, VkPipelineLayout layout,
+                DescriptorBindingRecordState& state) const {
+        binding_->Record(command, layout, state);
+    }
+    friend bool operator==(const DescriptorBindingVersion& a, const DescriptorBindingVersion& b) {
+        return Arc<PreparedDescriptorBinding>::ptr_eq(a.binding_, b.binding_);
+    }
+
+private:
+    friend class PreparedResourceTable;
+    friend class DescriptorSystem;
+    explicit DescriptorBindingVersion(PreparedDescriptorBinding binding)
+        : binding_(Arc<PreparedDescriptorBinding>::make(rstd::move(binding))) {}
+    explicit DescriptorBindingVersion(Arc<PreparedDescriptorBinding> binding)
+        : binding_(rstd::move(binding)) {}
+
+    Arc<PreparedDescriptorBinding> binding_;
+};
+
 class DescriptorSystem {
 public:
-    auto ReplaceImages(const vulkan::Device& device, const PreparedDescriptorBinding& source,
+    auto ReplaceImages(const vulkan::Device& device, const DescriptorBindingVersion& version,
                        slice<DescriptorImageBinding>   images,
                        const DescriptorLayoutRegistry& layouts)
-        -> Result<PreparedDescriptorBinding, resource::ResourceError> {
+        -> Result<DescriptorBindingVersion, resource::ResourceError> {
+        const auto& source = *version.binding_;
+        if (source.MatchesImages(images)) return Ok(version.clone());
         if (images.len() != source.images.len())
             return Err(resource::ResourceError {
                 .kind    = resource::ResourceErrorKind::IncompatibleLayout,
@@ -579,12 +610,11 @@ public:
                     .kind    = resource::ResourceErrorKind::IncompatibleLayout,
                     .message = rstd::format("descriptor image bindings changed") });
         }
-        if (source.MatchesImages(images)) return Ok(source.clone());
         if (source.backend == DescriptorBindingBackend::Push) {
             auto replacement   = PreparePush(source.set_index, images, source.buffers.as_slice());
             replacement.handle = source.handle;
             replacement.layout = source.layout;
-            return Ok(rstd::move(replacement));
+            return Ok(DescriptorBindingVersion(rstd::move(replacement)));
         }
         auto layout = layouts.Resolve(source.layout);
         if (! layout)
@@ -599,7 +629,7 @@ public:
                                    DescriptorBindingReuse::Exclusive);
         if (replacement.is_err()) return Err(replacement.unwrap_err());
         replacement->handle = source.handle;
-        return replacement;
+        return Ok(DescriptorBindingVersion(replacement.unwrap()));
     }
     auto Snapshot(const vulkan::Device& device, const PreparedDescriptorBinding& source,
                   const DescriptorLayoutRegistry& layouts)

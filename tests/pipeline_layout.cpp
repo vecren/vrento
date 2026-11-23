@@ -125,7 +125,7 @@ TEST(PreparedGraphicsResources, SharedBindingsAndDescriptorLifetime) {
     EXPECT_TRUE(resources->Prepared().Resolve(descriptor));
     prepared = None();
     EXPECT_FALSE(resources->Prepared().Resolve(descriptor));
-    EXPECT_TRUE(snapshot.set);
+    EXPECT_NE(snapshot.set_handle(), VK_NULL_HANDLE);
     {
         [[maybe_unused]] auto released = rstd::move(resources);
     }

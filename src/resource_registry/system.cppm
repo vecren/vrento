@@ -1123,20 +1123,19 @@ private:
     auto ReplaceDescriptorImages(resource::DescriptorBindingHandle handle,
                                  slice<DescriptorImageBinding>     images)
         -> Result<empty, resource::ResourceError> {
-        auto prepared = m_prepared.ResolveMut(handle);
+        auto prepared = m_prepared.Resolve(handle);
         if (! prepared)
             return Err(resource::ResourceError {
                 .kind = resource::ResourceErrorKind::MissingDefinition,
                 .message =
                     rstd::format("prepared descriptor binding {} unavailable", handle.index) });
-        if ((*prepared)->MatchesImages(images)) return Ok(empty {});
         auto replacement =
             m_registries.Descriptors().ReplaceImages(TextureContext().session().device(),
                                                      **prepared,
                                                      images,
                                                      m_registries.DescriptorLayouts());
         if (replacement.is_err()) return Err(replacement.unwrap_err());
-        **prepared = replacement.unwrap();
+        if (*replacement != **prepared) (void)m_prepared.Insert(replacement.unwrap());
         return Ok(empty {});
     }
     void FailPreparePlan(const resource::ResourceError& error) {

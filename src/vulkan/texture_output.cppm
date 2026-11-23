@@ -93,21 +93,17 @@ void main() {
     };
     return Ok(GraphicsDrawDesc { {}, pipeline, render_pass, rstd::move(request) });
 }
-inline auto texture_output_frame(const DeviceSession&                                session,
-                                 const resource_registry::PreparedDescriptorBinding& descriptor,
-                                 VkExtent2D                                          extent)
-    -> Result<GraphicsFrameData, resource::ResourceError> {
-    auto& owner = session.graphics_resources();
-    auto  snapshot =
-        owner.descriptor_snapshots.Snapshot(session.device(), descriptor, owner.descriptors);
-    if (snapshot.is_err()) return Err(snapshot.unwrap_err());
+inline auto texture_output_frame(const resource_registry::DescriptorBindingVersion& descriptor,
+                                 VkExtent2D extent) -> GraphicsFrameData {
     GraphicsFrameData result;
-    result.descriptors.push(snapshot.unwrap());
-    result.viewports.push(
+    result.descriptors.push(descriptor.clone());
+    GraphicsDrawBindings::Data bindings;
+    bindings.viewports.push(
         { 0, float(extent.height), float(extent.width), -float(extent.height), 0, 1 });
-    result.scissors.push({ { 0, 0 }, extent });
+    bindings.scissors.push({ { 0, 0 }, extent });
+    result.bindings = Some(GraphicsDrawBindings(rstd::move(bindings)));
     result.draws.push({ 4, 0 });
-    return Ok(rstd::move(result));
+    return result;
 }
 inline auto declare_graphics_surface_output(fg::FrameGraphBuilder& graph, PassId draw_id,
                                             PassId release_id, pass::ContentRef source,
@@ -262,15 +258,12 @@ public:
                 if (updated.is_err()) return invalid();
                 auto descriptor = resources.Prepared().Resolve((*prepared_)->descriptor);
                 if (! descriptor) return invalid();
-                auto frame =
-                    texture_output_frame(target.session(),
-                                         **descriptor,
-                                         { lease.image.extent.width, lease.image.extent.height });
-                if (frame.is_err()) return invalid();
-                frame->textures.push(texture::TextureViewRef(selected->view));
-                frame->samplers.push(texture::SamplerRef(selected->sampler));
+                auto frame = texture_output_frame(
+                    **descriptor, { lease.image.extent.width, lease.image.extent.height });
+                frame.textures.push(texture::TextureViewRef(selected->view));
+                frame.samplers.push(texture::SamplerRef(selected->sampler));
                 auto bound = compiled.frame<GraphicsDrawPass>(
-                    desc.execution().id, desc.revision(), frame.unwrap());
+                    desc.execution().id, desc.revision(), rstd::move(frame));
                 if (bound.is_err()) return Err(bound.unwrap_err());
                 request.parameters.push(bound.unwrap());
             } else {

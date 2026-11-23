@@ -223,17 +223,31 @@ inline auto declare_graphics_clear(fg::FrameGraphBuilder& graph, PassId id,
 struct GraphicsDrawRange {
     rstd::uint32_t count {}, first {};
 };
+class GraphicsDrawBindings {
+public:
+    struct Data {
+        Vec<BufferAllocation>    vertices, buffers;
+        Option<BufferAllocation> indices;
+        Vec<VkViewport>          viewports;
+        Vec<VkRect2D>            scissors;
+    };
+
+    explicit GraphicsDrawBindings(Data data): data_(Arc<Data>::make(rstd::move(data))) {}
+    auto clone() const -> GraphicsDrawBindings { return GraphicsDrawBindings(data_.clone()); }
+    auto view() const -> ref<Data> { return data_.deref(); }
+
+private:
+    explicit GraphicsDrawBindings(Arc<Data> data): data_(rstd::move(data)) {}
+    Arc<Data> data_;
+};
 struct GraphicsFrameData {
-    Vec<resource_registry::PreparedDescriptorBinding> descriptors;
-    Vec<BufferAllocation>                             vertices, buffers;
-    Option<BufferAllocation>                          indices;
-    Vec<texture::TextureViewRef>                      textures;
-    Vec<texture::SamplerRef>                          samplers;
-    Vec<VkViewport>                                   viewports;
-    Vec<VkRect2D>                                     scissors;
-    Vec<GraphicsDrawRange>                            draws;
-    rstd::uint32_t                                    instances { 1 };
-    bool                                              visible { true };
+    Vec<resource_registry::DescriptorBindingVersion> descriptors;
+    Option<GraphicsDrawBindings>                     bindings;
+    Vec<texture::TextureViewRef>                     textures;
+    Vec<texture::SamplerRef>                         samplers;
+    Vec<GraphicsDrawRange>                           draws;
+    rstd::uint32_t                                   instances { 1 };
+    bool                                             visible { true };
 };
 struct PreparedGraphicsLayouts {
     PipelineLayoutPlan        plan;
@@ -286,18 +300,19 @@ struct GraphicsDrawCommands {
         for (const auto& descriptor : frame->descriptors)
             descriptor.Record(command, pipeline->pipeline.layout, state);
         command.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline->pipeline.handle);
-        command.SetViewport(0, frame->viewports.as_slice());
-        command.SetScissor(0, frame->scissors.as_slice());
-        for (usize i {}; i < frame->vertices.len(); ++i) {
-            auto buffer = frame->vertices[i].buffer();
-            auto offset = frame->vertices[i].offset();
+        const auto& bindings = *frame->bindings->view();
+        command.SetViewport(0, bindings.viewports.as_slice());
+        command.SetScissor(0, bindings.scissors.as_slice());
+        for (usize i {}; i < bindings.vertices.len(); ++i) {
+            auto buffer = bindings.vertices[i].buffer();
+            auto offset = bindings.vertices[i].offset();
             command.BindVertexBuffers(i.to_primitive(), 1, &buffer, &offset);
         }
-        if (frame->indices)
+        if (bindings.indices)
             command.BindIndexBuffer(
-                frame->indices->buffer(), frame->indices->offset(), VK_INDEX_TYPE_UINT32);
+                bindings.indices->buffer(), bindings.indices->offset(), VK_INDEX_TYPE_UINT32);
         for (auto draw : frame->draws)
-            if (frame->indices)
+            if (bindings.indices)
                 command.DrawIndexed(draw.count, frame->instances, draw.first, 0, 0);
             else
                 command.Draw(draw.count, frame->instances, draw.first, 0);
@@ -374,16 +389,18 @@ auto GraphicsDrawPass::Instantiate(const GraphPrepareContext& context,
     -> Result<vrento::vulkan::Preparation<Arc<dyn<VulkanPass>>>, GraphExecutionError> {
     if (! context.scope || session.epoch() != context.session.epoch())
         return Err(GraphExecutionError { GraphExecutionStage::Schema });
-    if (frame->viewports.is_empty() || frame->scissors.is_empty())
+    if (! frame->bindings) return Err(GraphExecutionError { GraphExecutionStage::Prepare });
+    const auto& bindings = *frame->bindings->view();
+    if (bindings.viewports.is_empty() || bindings.scissors.is_empty())
         return Err(GraphExecutionError { GraphExecutionStage::Prepare });
     auto valid = [&](const BufferAllocation& allocation) {
         return allocation && allocation.device() == *session.device().handle();
     };
-    for (const auto& allocation : frame->vertices)
+    for (const auto& allocation : bindings.vertices)
         if (! valid(allocation)) return Err(GraphExecutionError { GraphExecutionStage::Binding });
-    for (const auto& allocation : frame->buffers)
+    for (const auto& allocation : bindings.buffers)
         if (! valid(allocation)) return Err(GraphExecutionError { GraphExecutionStage::Binding });
-    if (frame->indices && ! valid(*frame->indices))
+    if (bindings.indices && ! valid(*bindings.indices))
         return Err(GraphExecutionError { GraphExecutionStage::Binding });
     return Ok(Arc<dyn<VulkanPass>>::make(
         GraphicsDrawCommands { session, pipeline.clone(), rstd::move(frame) }));

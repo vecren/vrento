@@ -111,11 +111,6 @@ struct PreparedFramebufferLease {
     Arc<vvk::Framebuffer>       physical;
 };
 
-struct PreparedDescriptorLease {
-    resource::DescriptorBindingHandle handle;
-    Option<vvk::DescriptorSetLease>   set;
-};
-
 struct PreparedExternalLease {
     resource::ExternalUseHandle use;
     FrameSurfaceLease           lease;
@@ -128,7 +123,7 @@ struct PreparedResourceLeases {
     Vec<PreparedPipelineLease>    pipelines;
     Vec<PreparedRenderPassLease>  render_passes;
     Vec<PreparedFramebufferLease> framebuffers;
-    Vec<PreparedDescriptorLease>  descriptors;
+    Vec<DescriptorBindingVersion> descriptors;
     Vec<PreparedExternalLease>    externals;
 };
 
@@ -213,8 +208,8 @@ public:
     auto TrackDescriptorTextures(resource::DescriptorBindingHandle handle,
                                  slice<DescriptorTextureBinding>   sources) -> bool {
         auto descriptor = Resolve(handle);
-        if (! descriptor || (*descriptor)->images.len() != sources.len()) return false;
-        for (const auto& image : (*descriptor)->images) {
+        if (! descriptor || (*descriptor)->images().len() != sources.len()) return false;
+        for (const auto& image : (*descriptor)->images()) {
             usize matches {};
             for (const auto& source : sources)
                 if (source.binding == image.binding) ++matches;
@@ -316,17 +311,17 @@ public:
     }
 
     bool Insert(PreparedDescriptorBinding binding) {
-        return m_descriptors.insert(binding.handle, rstd::move(binding)).is_none();
+        return Insert(DescriptorBindingVersion(rstd::move(binding)));
+    }
+
+    bool Insert(DescriptorBindingVersion version) {
+        auto handle = version.handle();
+        return m_descriptors.insert(handle, rstd::move(version)).is_none();
     }
 
     auto Resolve(resource::DescriptorBindingHandle handle) const
-        -> Option<ref<PreparedDescriptorBinding>> {
+        -> Option<ref<DescriptorBindingVersion>> {
         return m_descriptors.get(handle);
-    }
-
-    auto ResolveMut(resource::DescriptorBindingHandle handle)
-        -> Option<mut_ref<PreparedDescriptorBinding>> {
-        return m_descriptors.get_mut(handle);
     }
 
     void Insert(PreparedExternalUse external) {
@@ -368,15 +363,11 @@ public:
             });
         }
 
-        auto descriptor_leases = Vec<PreparedDescriptorLease>::with_capacity(m_descriptors.len());
+        auto descriptor_leases = Vec<DescriptorBindingVersion>::with_capacity(m_descriptors.len());
         auto descriptors       = m_descriptors.values();
         for (auto descriptor = descriptors.next(); descriptor.is_some();
              descriptor      = descriptors.next()) {
-            descriptor_leases.push(PreparedDescriptorLease {
-                .handle = (**descriptor).handle,
-                .set    = (**descriptor).set.is_some() ? Some((**descriptor).set->clone())
-                                                       : None<vvk::DescriptorSetLease>(),
-            });
+            descriptor_leases.push((**descriptor).clone());
         }
 
         auto buffer_leases = Vec<PreparedBufferLease>::with_capacity(m_buffers.len());
@@ -537,10 +528,8 @@ public:
             });
         }
 
-        auto descriptors = m_descriptors.values();
-        for (auto value = descriptors.next(); value.is_some(); value = descriptors.next()) {
-            (void)cloned.Insert((**value).clone());
-        }
+        for (const auto& [handle, version] : m_descriptors.iter())
+            (void)cloned.m_descriptors.insert(*handle, version->clone());
 
         for (const auto& [handle, sources] : m_descriptor_textures.iter())
             (void)cloned.TrackDescriptorTextures(*handle, sources->as_slice());
@@ -578,7 +567,7 @@ public:
 
 private:
     using TextureMap     = HashMap<resource::TextureUseHandle, PreparedTexture>;
-    using DescriptorMap  = HashMap<resource::DescriptorBindingHandle, PreparedDescriptorBinding>;
+    using DescriptorMap  = HashMap<resource::DescriptorBindingHandle, DescriptorBindingVersion>;
     using BufferMap      = HashMap<resource::BufferUseHandle, PreparedBufferUse>;
     using ShaderMap      = HashMap<resource::ShaderUseHandle, PreparedShaderUse>;
     using PipelineMap    = HashMap<resource::PipelineUseHandle, PreparedPipeline>;

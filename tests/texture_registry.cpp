@@ -713,8 +713,8 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
             .unwrap();
     };
     auto a = prepare(first), shared = prepare(first), b = prepare(second);
-    auto retained        = resources.Prepared().clone();
-    auto physical_key    = [&](const registry::PreparedResourceTable& table) {
+    auto retained     = resources.Prepared().clone();
+    auto physical_key = [&](const registry::PreparedResourceTable& table) {
         const auto& texture = **table.Resolve(first);
         const auto  slot    = texture.PhysicalBinding(usize()).unwrap();
         const auto  layout  = table.PhysicalBindings().unwrap();
@@ -727,9 +727,9 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
     auto original        = (**retained.Resolve(a)).clone();
     auto original_shared = (**retained.Resolve(shared)).clone();
     auto unrelated       = (**retained.Resolve(b)).clone();
-    ASSERT_EQ(original.backend, registry::DescriptorBindingBackend::Set);
+    ASSERT_NE(original.set_handle(), VK_NULL_HANDLE);
     resources.PreparePlan(plan, {}, resource::ResourcePlanTextures).unwrap();
-    EXPECT_EQ((*resources.Prepared().Resolve(a))->set->handle, original.set->handle);
+    EXPECT_TRUE(**resources.Prepared().Resolve(a) == original);
     auto next_request              = plan.textures[usize()].definition.definition().clone();
     next_request.definition->width = i32(16);
     plan.textures[usize()].definition =
@@ -740,16 +740,17 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
            registry::ResourcePrepareProgress::Complete) {
     }
     auto replaced = (**resources.Prepared().Resolve(a)).clone();
-    EXPECT_NE(replaced.set->handle, original.set->handle);
-    EXPECT_NE((*resources.Prepared().Resolve(shared))->set->handle, original_shared.set->handle);
-    EXPECT_EQ((*resources.Prepared().Resolve(b))->set->handle, unrelated.set->handle);
-    EXPECT_NE(replaced.images[usize()].image.view, original.images[usize()].image.view);
-    EXPECT_EQ((*retained.Resolve(a))->set->handle, original.set->handle);
+    EXPECT_NE(replaced.set_handle(), original.set_handle());
+    EXPECT_NE((*resources.Prepared().Resolve(shared))->set_handle(), original_shared.set_handle());
+    EXPECT_TRUE(**resources.Prepared().Resolve(b) == unrelated);
+    EXPECT_EQ(replaced.handle(), original.handle());
+    EXPECT_NE(replaced.images()[usize()].image.view, original.images()[usize()].image.view);
+    EXPECT_TRUE(**retained.Resolve(a) == original);
     EXPECT_NE(physical_key(resources.Prepared()), original_key);
     EXPECT_EQ(physical_key(retained), original_key);
     EXPECT_TRUE(resources.CancelPreparePlan(transaction));
     EXPECT_EQ(physical_key(resources.Prepared()), original_key);
-    EXPECT_EQ((*resources.Prepared().Resolve(a))->set->handle, original.set->handle);
+    EXPECT_TRUE(**resources.Prepared().Resolve(a) == original);
     EXPECT_EQ(resources.Prepared()
                   .AffectedTextureDescriptors(
                       slice<resource::TextureUseHandle>::from_raw_parts(&first, usize(1)))
@@ -757,21 +758,22 @@ TEST(RenderResourceSystem, RefreshesOnlyDependentDescriptorsAndRollsBackReplacem
               usize(2));
     resources.PreparePlan(plan, {}, resource::ResourcePlanTextures).unwrap();
     auto committed = (**resources.Prepared().Resolve(a)).clone();
-    EXPECT_NE(committed.set->handle, original.set->handle);
-    EXPECT_EQ((*resources.Prepared().Resolve(b))->set->handle, unrelated.set->handle);
+    EXPECT_NE(committed.set_handle(), original.set_handle());
+    EXPECT_TRUE(**resources.Prepared().Resolve(b) == unrelated);
     registry::DescriptorTextureBinding invalid { 0, first, usize(99) };
     EXPECT_TRUE(
         resources
             .UpdateDescriptorTextures(
                 a, slice<registry::DescriptorTextureBinding>::from_raw_parts(&invalid, usize(1)))
             .is_err());
-    EXPECT_EQ((*resources.Prepared().Resolve(a))->set->handle, committed.set->handle);
+    EXPECT_TRUE(**resources.Prepared().Resolve(a) == committed);
     auto missing = plan.clone();
     missing.textures.remove(usize());
     EXPECT_TRUE(resources.PreparePlan(missing, {}, resource::ResourcePlanTextures).is_err());
     EXPECT_EQ(resources.PrepareStatus().state, registry::ResourcePrepareState::Failed);
-    EXPECT_EQ((*resources.Prepared().Resolve(a))->set->handle, committed.set->handle);
-    resources.UpdateDescriptorImages(a, committed.images.as_slice()).unwrap();
+    EXPECT_TRUE(**resources.Prepared().Resolve(a) == committed);
+    resources.UpdateDescriptorImages(a, committed.images()).unwrap();
+    EXPECT_TRUE(**resources.Prepared().Resolve(a) == committed);
     EXPECT_TRUE(resources.Prepared().DescriptorTextures(a).is_empty());
     EXPECT_EQ(resources.Prepared()
                   .AffectedTextureDescriptors(
