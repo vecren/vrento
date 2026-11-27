@@ -602,10 +602,13 @@ struct SwapchainOptions {
                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT };
     PresentationMode  presentation { PresentationMode::Fifo };
     Option<VkSurfaceTransformFlagBitsKHR> pre_transform;
+    VkCompositeAlphaFlagBitsKHR preferred_composite_alpha { VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR };
 };
 
 class Swapchain {
 public:
+    static auto SurfaceExtent(const vvk::PhysicalDevice&, VkSurfaceKHR, VkExtent2D requested)
+        -> Result<VkExtent2D, VkResult>;
     static bool Create(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&, SwapchainOptions = {});
     static auto CreateResult(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&, SwapchainOptions = {})
         -> VkResult;
@@ -613,6 +616,7 @@ public:
     VkFormat                 format() const;
     VkExtent2D               extent() const;
     VkPresentModeKHR         presentMode() const;
+    VkCompositeAlphaFlagBitsKHR composite_alpha() const;
     slice<ImageParameters>   images() const;
     void                     reset();
 
@@ -621,6 +625,7 @@ private:
     VkSurfaceFormatKHR   m_format {};
     VkExtent2D           m_extent {};
     VkPresentModeKHR     m_present_mode {};
+    VkCompositeAlphaFlagBitsKHR m_composite_alpha { VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR };
     Vec<ImageParameters> m_images;
     Vec<vvk::ImageView>  m_imageviews;
 };

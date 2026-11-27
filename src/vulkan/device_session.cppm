@@ -271,6 +271,20 @@ public:
     auto validation_errors() const -> unsigned {
         return __atomic_load_n(&state_->errors, __ATOMIC_RELAXED);
     }
+    auto surface_extent(VkExtent2D requested) const -> Result<VkExtent2D, DeviceSessionError> {
+        if (lost())
+            return Err(DeviceSessionError{DeviceSessionStage::Lost, VK_ERROR_DEVICE_LOST});
+        if (!has_surface())
+            return Err(DeviceSessionError{DeviceSessionStage::Invalid});
+        auto extent = Swapchain::SurfaceExtent(device().gpu(), *state_->instance.surface(), requested);
+        if (extent.is_err()) {
+            auto result = observe_result(extent.unwrap_err());
+            return Err(DeviceSessionError{result == VK_ERROR_DEVICE_LOST ? DeviceSessionStage::Lost
+                                                                         : DeviceSessionStage::Surface,
+                                          result});
+        }
+        return Ok(extent.unwrap());
+    }
     // The surface owner must retire all swapchain users before calling this method.
     auto resize_surface(VkExtent2D extent, SwapchainOptions options)
         -> Result<empty, DeviceSessionError> {

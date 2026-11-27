@@ -91,6 +91,7 @@ void Swapchain::reset() {
     m_extent = {};
     m_format = {};
     m_present_mode = {};
+    m_composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
 const vvk::SwapchainKHR& Swapchain::handle() const { return m_handle; }
 VkFormat                 Swapchain::format() const { return m_format.format; }
@@ -99,6 +100,15 @@ VkExtent2D               Swapchain::extent() const { return m_extent; }
 slice<ImageParameters> Swapchain::images() const { return m_images.as_slice(); }
 
 VkPresentModeKHR Swapchain::presentMode() const { return m_present_mode; }
+VkCompositeAlphaFlagBitsKHR Swapchain::composite_alpha() const { return m_composite_alpha; }
+
+auto Swapchain::SurfaceExtent(const vvk::PhysicalDevice& gpu, VkSurfaceKHR surface,
+                              VkExtent2D requested) -> Result<VkExtent2D, VkResult> {
+    VkSurfaceCapabilitiesKHR caps{};
+    auto result = gpu.GetSurfaceCapabilitiesKHR(surface, caps);
+    if (result != VK_SUCCESS) return Err(result);
+    return Ok(GetSwapChainExtent(caps, requested));
+}
 
 bool Swapchain::Create(Device& device, VkSurfaceKHR surface, VkExtent2D extent, Swapchain& output,
                        SwapchainOptions options) {
@@ -137,12 +147,20 @@ auto Swapchain::CreateResult(Device& device, VkSurfaceKHR surface, VkExtent2D ex
     auto preferred = modes[unsigned(options.presentation)];
     for (auto available : swap_details.presentModes)
         if (available == preferred) swap.m_present_mode = preferred;
-    VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    auto requested_alpha = static_cast<unsigned>(options.preferred_composite_alpha);
+    if (! requested_alpha || (requested_alpha & (requested_alpha - 1)) ||
+        requested_alpha > VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    VkCompositeAlphaFlagBitsKHR compositeAlpha =
+        (surfaceCapabilities.supportedCompositeAlpha & requested_alpha)
+            ? options.preferred_composite_alpha
+            : VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     while (!(surfaceCapabilities.supportedCompositeAlpha & compositeAlpha)) {
         compositeAlpha = static_cast<VkCompositeAlphaFlagBitsKHR>(static_cast<unsigned>(compositeAlpha) << 1);
         if (!compositeAlpha || static_cast<unsigned>(compositeAlpha) > VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
             return VK_ERROR_INITIALIZATION_FAILED;
     }
+    swap.m_composite_alpha = compositeAlpha;
     rstd::uint32_t families[] { device.graphics_queue().family_index, device.present_queue().family_index };
     bool separate = families[0] != families[1];
 
