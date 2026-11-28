@@ -21,6 +21,7 @@ struct TextureSpec {
     Option<vrento::texture::TextureDesc>  metadata;
     Option<resource::TextureDefinitionId> source;
     bool                                  initialize_history_transparent {};
+    usize                                 sample_image_count { 1 };
     auto                                  source_request() const -> resource::TextureRequest {
         auto result = request().clone();
         if (source) result.source = source;
@@ -33,7 +34,8 @@ struct TextureSpec {
                  allocation_family.clone(),
                  metadata,
                  source,
-                 initialize_history_transparent };
+                 initialize_history_transparent,
+                 sample_image_count };
     }
 };
 struct TextureUse {
@@ -277,12 +279,32 @@ public:
                 existing.spec.imported != spec.imported ||
                 existing.spec.metadata != spec.metadata || existing.spec.source != spec.source ||
                 existing.spec.allocation_family != spec.allocation_family ||
+                existing.spec.sample_image_count != spec.sample_image_count ||
                 existing.spec.initialize_history_transparent !=
                     spec.initialize_history_transparent ||
                 ! resource::SameTextureRequest(existing.spec.request(), spec.request()))
                 return Err(fg::Error { fg::ErrorKind::Conflict, {}, existing.id });
             return Ok(fg::ResourceVersion { existing.id, 0 });
         }
+        return register_texture(graph, rstd::move(spec));
+    }
+    auto import_sampled_view(fg::FrameGraphBuilder& graph, const ContentRef& source)
+        -> Result<ContentRef, fg::Error> {
+        if (graph.data().scope != generation_.to_primitive())
+            return Err(fg::Error { fg::ErrorKind::Conflict });
+        auto version = source.resolve(graph.data().scope);
+        if (version.is_err()) return Err(version.unwrap_err());
+        const auto* texture = find(version->resource);
+        if (! texture || ! source.initial() || ! texture->spec.imported ||
+            texture->spec.request().kind != resource::TextureRequestKind::Imported)
+            return Err(fg::Error { fg::ErrorKind::Conflict, {}, version->resource });
+        auto registered = register_texture(graph, texture->spec.clone());
+        return registered.is_ok() ? content(graph, *registered) : Err(registered.unwrap_err());
+    }
+
+private:
+    auto register_texture(fg::FrameGraphBuilder& graph, TextureSpec spec)
+        -> Result<fg::ResourceVersion, fg::Error> {
         auto       id = graph.next_resource_id();
         fg::Serial allocation_class {};
         if (spec.allocation_family &&
@@ -330,6 +352,8 @@ public:
         textures_.push({ id, rstd::move(spec) });
         return declared;
     }
+
+public:
     auto bindings(const fg::FrameGraph& graph, const resource::ResourcePlan& plan) const
         -> Result<GraphResourceMap, fg::Error> {
         if (plan.generation != generation_) return Err(fg::Error { fg::ErrorKind::Conflict });
